@@ -4,6 +4,19 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+### Additions
+
+- **Slow sites can be given more patience per attempt with `BROWSER_WAIT_TIMEOUT` (default 1 second).** Applies to the Chrome engine, which waits a fixed moment for the challenge to clear before retrying; the stealth engine already polls until the request's own deadline. Raising it never extends `maxTimeout`.
+
+### Fixes
+
+- **Cookies a page sets from its own JavaScript during `waitInSeconds` are now returned instead of missed.** Both engines read the cookie jar before that wait, so a request could get back the page that set a cookie together with a cookie list that did not have it.
+- **A `tabs_till_verify` request no longer loses the Turnstile checkbox after its first failed attempt.** Each retry added another focusable element to the page, which moved the checkbox further along the tab order every time, so only the first attempt could reach it.
+
+### Other
+
+- Bumped Selenium, requests, certifi, websockets, packaging, prometheus-client, and xvfbwrapper to the versions upstream FlareSolverr now pins.
+
 ## [1.5.0]
 
 ### Changes

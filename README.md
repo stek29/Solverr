@@ -348,6 +348,7 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 | -------------------- | --------- | ----------------------------------------------------------------------------- |
 | `HEADLESS`           | `true`    | Run the Chrome engine headless (visible only for debugging).                   |
 | `DISABLE_MEDIA`      | `false`   | Block images/CSS/fonts by default to save bandwidth (both engines).            |
+| `BROWSER_WAIT_TIMEOUT` | `1`     | Seconds the Chrome engine waits for an expected page state on each attempt. Raise it on a slow host or a slow site. Chrome only: the stealth engine polls until the request's own deadline instead. It never extends `maxTimeout`. |
 | `BROWSER_GEO`        | none      | One tag setting the browser's language **and** timezone. Eg `de-DE`. See below. |
 | `LANG`               | none      | Browser language for both engines. Accepts `en_US.UTF-8` or `en-US`. See below. |
 | `BROWSER_TIMEZONE`   | `auto`    | Browser timezone for both engines: an IANA zone, or `auto` to follow the exit IP. See below. |

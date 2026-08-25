@@ -19,6 +19,7 @@ from selenium.webdriver.support.expected_conditions import (
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.wait import WebDriverWait
 
+import config
 import geo
 import utils
 from detection import (ACCESS_DENIED_TITLES, ACCESS_DENIED_SELECTORS,
@@ -26,8 +27,6 @@ from detection import (ACCESS_DENIED_TITLES, ACCESS_DENIED_SELECTORS,
 from dtos import V1RequestBase
 from engines.base import Engine, SolveResult
 from postform import build_post_html
-
-SHORT_TIMEOUT = 1
 
 
 class ChromeEngine(Engine):
@@ -164,6 +163,10 @@ class ChromeEngine(Engine):
                     logging.info("Challenge detected. Selector found: " + selector)
                     break
 
+        # Read once per request rather than per wait: the whole solve runs under
+        # func_timeout(maxTimeout), so a larger value only slows the retry
+        # cadence, it cannot outrun the request's share of the budget.
+        wait_timeout = config.browser_wait_timeout()
         attempt = 0
         if challenge_found:
             while True:
@@ -172,12 +175,12 @@ class ChromeEngine(Engine):
                     # wait until the title changes
                     for title in CHALLENGE_TITLES:
                         logging.debug("Waiting for title (attempt " + str(attempt) + "): " + title)
-                        WebDriverWait(driver, SHORT_TIMEOUT).until_not(title_is(title))
+                        WebDriverWait(driver, wait_timeout).until_not(title_is(title))
 
                     # then wait until all the selectors disappear
                     for selector in CHALLENGE_SELECTORS:
                         logging.debug("Waiting for selector (attempt " + str(attempt) + "): " + selector)
-                        WebDriverWait(driver, SHORT_TIMEOUT).until_not(
+                        WebDriverWait(driver, wait_timeout).until_not(
                             presence_of_element_located((By.CSS_SELECTOR, selector)))
 
                     # all elements not found
@@ -195,7 +198,7 @@ class ChromeEngine(Engine):
             logging.debug("Waiting for redirect")
             # noinspection PyBroadException
             try:
-                WebDriverWait(driver, SHORT_TIMEOUT).until(staleness_of(html_element))
+                WebDriverWait(driver, wait_timeout).until(staleness_of(html_element))
             except Exception:
                 logging.debug("Timeout waiting for redirect")
 
@@ -208,7 +211,6 @@ class ChromeEngine(Engine):
         result = SolveResult()
         result.url = driver.current_url
         result.status = 200  # todo: fix, selenium not provides this info
-        result.cookies = driver.get_cookies()
         result.user_agent = utils.get_user_agent(driver)
         result.turnstile_token = turnstile_token
         result.message = message
@@ -224,6 +226,11 @@ class ChromeEngine(Engine):
 
         if req.returnScreenshot:
             result.screenshot = driver.get_screenshot_as_base64()
+
+        # Read last, after waitInSeconds: a page that sets cookies from its own
+        # JS does it during that wait, and reading before it handed back the
+        # body that has them with a cookie list that does not.
+        result.cookies = driver.get_cookies()
 
         return result
 
@@ -293,12 +300,22 @@ def _get_turnstile_token(driver: WebDriver, tabs: int):
                 return turnstile_token
         logging.debug(f"Failed to extract token possibly click failed")
 
-        # reset focus
+        # Reset focus. Reuses one id and removes the previous helper first:
+        # prepending a fresh button per failed attempt stacked them up, and each
+        # one is another stop in the tab order, so tabs_till_verify stopped
+        # reaching the checkbox after the first retry. Kept nearly transparent
+        # and click-through so it cannot cover the page it sits on top of.
         driver.execute_script("""
+            let old = document.getElementById('__focus_helper');
+            if (old) old.remove();
+
             let el = document.createElement('button');
-            el.style.position='fixed';
-            el.style.top='0';
-            el.style.left='0';
+            el.id = '__focus_helper';
+            el.style.position = 'fixed';
+            el.style.top = '0';
+            el.style.left = '0';
+            el.style.opacity = '0.01';
+            el.style.pointerEvents = 'none';
             document.body.prepend(el);
             el.focus();
         """)

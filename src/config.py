@@ -137,6 +137,22 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def browser_wait_timeout() -> int:
+    """Seconds the Chrome engine waits for an expected page state on each attempt.
+
+    Raise it on a slow host or a slow site, where one second is not enough for
+    the challenge markup to go and every pass burns a click retry it did not
+    need. Chrome only: the stealth engine has no fixed per-attempt wait, it
+    polls until the request's own deadline.
+
+    A value that is not a number falls back to the default rather than raising,
+    unlike upstream's bare int(): the engine reads this mid-solve, so a raise
+    there surfaces as "Error solving the challenge" and a silent fallback to the
+    other engine, which tells nobody the variable is malformed.
+    """
+    return _int_env('BROWSER_WAIT_TIMEOUT', 1)
+
+
 def session_ttl_minutes() -> int:
     """Idle minutes before the reaper closes a session's browser (0 disables reaping)."""
     return _int_env('SESSION_TTL_MINUTES', 30)

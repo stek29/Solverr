@@ -514,7 +514,6 @@ class StealthEngine(Engine):
             # upstream 403) doesn't get surfaced as a solve failure. A real block is
             # already raised as an error by the "denied" detection above.
             result.status = 200
-            result.cookies = _to_client_cookies(await ctx.context.cookies())
             if not ctx.user_agent:
                 # Backfill the context so a session that started without one
                 # recovers for its later requests too, not just this response.
@@ -540,6 +539,12 @@ class StealthEngine(Engine):
 
             if req.returnScreenshot:
                 result.screenshot = base64.b64encode(await page.screenshot()).decode("ascii")
+
+            # Read last, after waitInSeconds, for the same reason as the Chrome
+            # engine: a page that sets cookies from its own JS does it during
+            # that wait, and reading before it handed back the body that has
+            # them with a cookie list that does not.
+            result.cookies = _to_client_cookies(await ctx.context.cookies())
 
             return result
         finally:
