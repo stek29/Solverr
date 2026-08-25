@@ -37,7 +37,9 @@ uv run python -m unittest src.tests  # test suite (unittest + webtest; needs a b
 - `src/engines/` — `base.py` (Engine + SolveResult), `chrome_engine.py`, `stealth_engine.py`.
 - `src/async_runtime.py`, `src/session_reaper.py`, `src/sessions.py` — stealth event loop, idle reaper, Chrome session store.
 - `src/detection.py` (shared challenge/title/selector lists), `src/geo.py` (browser timezone for both engines), `src/config.py` (env), `src/postform.py`, `src/dtos.py`.
+- `.claude/rules/engine-layer.md` — **the law for anything touching an engine**: write-once and its one exit, which code is upstream's and which is ours, capability slots, the pin-once ladder, and how deep the seam goes per surface. Loads every session.
 - `.claude/rules/workflow.md` — CHANGELOG + commit rules, release-cut, public-facing naming, git hooks. `code-quality.md` — coding principles. `security.md` / `error-handling.md` — path-scoped to `src/`. `plan-output.md` — how a findings report or plan is structured. `prose-style.md` — sentence-level writing for every output.
+- `docs/dev/engine-layer-architecture.md` — the rationale behind that law: the divergence measurements against both upstreams, the target seam, the sequencing, and every ruling with the evidence it rests on. Read it before designing anything forward-looking.
 - `docs/dev/upstream-sync.md` — what has been taken from FlareSolverr and Byparr, through which commit, and every deliberate divergence with its reasoning. Read it before calling something drift.
 - `docs/dev/loops.md` — the port loop's contract: what the manager and worker each own, what they may not do, the three verification gates, and the eligibility rules that keep the worker away from the engines.
 - `.githooks/` — tracked commit-msg and pre-commit hooks. Activate with `git config core.hooksPath .githooks`.
