@@ -18,7 +18,6 @@ reimplementation wired directly into the controller.
 """
 import base64
 import logging
-import os
 import re
 import threading
 import time
@@ -92,15 +91,9 @@ def _split_host(raw_path: str):
 def _apply_env_proxy(req: V1RequestBase) -> None:
     """Mirror the PROXY_URL injection the /v1 route does, so passthrough solves
     use the same configured (e.g. residential) proxy. Engines read req.proxy."""
-    url = os.environ.get('PROXY_URL')
-    if not url:
-        return
-    username = os.environ.get('PROXY_USERNAME')
-    password = os.environ.get('PROXY_PASSWORD')
-    if username is None and password is None:
-        req.proxy = {"url": url}
-    else:
-        req.proxy = {"url": url, "username": username, "password": password}
+    proxy = config.env_proxy()
+    if proxy is not None:
+        req.proxy = proxy
 
 
 def _solve(target: str):

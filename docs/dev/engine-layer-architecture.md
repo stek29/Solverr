@@ -53,7 +53,7 @@ result assembly.
 |---|---|---|---|---|
 | `TAB_DRIVEN_TURNSTILE` | yes | no, clicks by coordinate | silent no-op on stealth | routed, or refused by name |
 | `RAW_DOCUMENT_BODY` | no | yes | README tells the client to pin stealth | routed automatically |
-| `RESPONSE_HEADERS` | via the CDP performance log | via the main-frame response | `{}` on both | both answer it |
+| `RESPONSE_HEADERS` | CDP performance log | main-frame response | **shipped**, behind one setting |
 | `PAID_ESCALATION` | no | yes | dormant, undeclared | declared |
 
 Solverr can go further than a capability flag here, because it already chooses the engine: a
@@ -190,8 +190,26 @@ live-checked.
    another operation at each lock release in turn, which is deterministic. The expiry race fails at
    window 2 on the old code, the release right after the busy check; the handout race fails at
    window 1, the release right after `create` finds the session.
-6. **Config, then `RESPONSE_HEADERS`** as the first feature written once under the new rule, which
-   is what proves the seam works.
+6. **Config, then `RESPONSE_HEADERS`.** Done 2026-08-25.
+
+   The config half was smaller than planned and larger than expected elsewhere. Moving
+   `utils.get_config_*` into `config.py` was **declined**: those three readers are upstream's, in a
+   file the ledger tracks as near-identical, and no rule is duplicated by their living there, so the
+   move would buy tidiness and cost mergeability. What was genuinely duplicated is the environment
+   proxy, read in three places with the copies disagreeing. The startup timezone lookup built
+   `{"url": ...}` without the credentials, and `geo` caches per proxy *server* rather than per
+   credential set, so with an authenticated proxy that lookup was refused and the fallback zone and
+   language were then cached for every request that followed. One `config.env_proxy()` now serves
+   both Solverr-owned call sites; upstream's own copy in `flaresolverr.py` is left alone.
+
+   `RESPONSE_HEADERS` is the first feature written once under the seam, which is what it was
+   sequenced last to demonstrate. `assembly.py` gained one read, and each engine answers it from a
+   completely different place: the Chrome engine drains the browser's CDP performance log and takes
+   the last main-document response, the stealth engine reads the navigation response it already
+   tracked for PDF detection. One setting gates both, so `solution.headers` never depends on which
+   engine solved. Off by default for two reasons kept in the config docstring: the field has been an
+   empty map since the fork, and the Chrome half changes what the browser does on every request in a
+   way no fingerprinting check has measured yet.
 
 Steps 1 and 3 alone remove most of the duplication class.
 

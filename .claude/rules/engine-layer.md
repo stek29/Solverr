@@ -92,7 +92,7 @@ work gets mis-planned.
 | Solve orchestration | Takeover of orchestration | The page verdict and the navigation order (`pipeline.py`), the solve deadline (`budget.py`). The even split and the fallback were already single-sourced in `_resolve_challenge` | **Done** |
 | Challenge clearing | Engine only, by mechanism | Nothing. Declined, see Ownership | Standing decline |
 | Sessions | Takeover | One `SessionStore` per engine, one implementation (`sessions.py`). No `SessionRef`: see the record | **Done** |
-| Config | Takeover | One environment layer | Not started |
+| Config | Takeover | One reader per setting. `utils.get_config_*` stays where upstream put it, see the record | **Done** |
 | Passthrough | Not an engine surface | Single implementation already | n/a |
 
 **The two depths fail differently, so look for different things.** A taken-over surface produces

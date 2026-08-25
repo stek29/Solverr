@@ -10,6 +10,7 @@ Chrome, Playwright cookies for stealth. That difference is deliberate, because
 agreeing on the returned dialect is one of the rules being pinned.
 """
 import asyncio
+import json
 from dataclasses import dataclass, field
 from unittest.mock import patch
 
@@ -43,6 +44,7 @@ class World:
     screenshot: bytes = b"\x89PNG-bytes"
     cookies_at_load: list = field(default_factory=lambda: list(LOADED))
     cookies_after_wait: list = field(default_factory=lambda: list(AFTER_WAIT))
+    response_headers: dict = field(default_factory=lambda: {"content-type": "text/html"})
     selectors: frozenset = frozenset()
     challenged_for: int = 0
     # Title reads so far, shared by both fakes so "challenged_for" means the
@@ -119,6 +121,18 @@ class _SeleniumDriver:
     def find_elements(self, _by, selector):
         return [object()] if self._world.has(selector) else []
 
+    def get_log(self, _kind):
+        # The shape Chrome actually writes: a JSON string per entry, wrapping a
+        # CDP message. An earlier Document response is included on purpose, so a
+        # reader that takes the first one instead of the last is caught.
+        def entry(url, headers):
+            return {"message": json.dumps({"message": {
+                "method": "Network.responseReceived",
+                "params": {"type": "Document",
+                           "response": {"url": url, "headers": headers}}}})}
+        return [entry("https://example-site.tld/challenge", {"cf-mitigated": "challenge"}),
+                entry(self._world.url, self._world.response_headers)]
+
     def get_screenshot_as_png(self):
         # Raw bytes, like Selenium's own: the base64 encoding is the kernel's job
         # so both engines hand over the same currency.
@@ -180,6 +194,7 @@ class _PlaywrightPage:
         self.url = world.url
         self.context = _PlaywrightContext(self)
         self.main_frame = object()
+        self._response_handlers = []
 
     async def title(self):
         return self.world.read_title()
@@ -192,6 +207,8 @@ class _PlaywrightPage:
 
     async def goto(self, *_a, **_k):
         self.world.navigations.append(1)
+        for handler in self._response_handlers:
+            handler(_Response(self))
 
     async def wait_for_load_state(self, *_a, **_k):
         pass
@@ -205,11 +222,30 @@ class _PlaywrightPage:
     async def unroute(self, *_a, **_k):
         pass
 
-    def on(self, *_a, **_k):
-        pass
+    def on(self, event, handler):
+        if event == "response":
+            self._response_handlers.append(handler)
 
-    def remove_listener(self, *_a, **_k):
-        pass
+    def remove_listener(self, _event, handler):
+        if handler in self._response_handlers:
+            self._response_handlers.remove(handler)
+
+
+class _Request:
+    def __init__(self, page):
+        self.headers = {"user-agent": page.world.user_agent}
+
+    def is_navigation_request(self):
+        return True
+
+
+class _Response:
+    """The main-frame navigation response both engines read headers off."""
+
+    def __init__(self, page):
+        self.request = _Request(page)
+        self.frame = page.main_frame
+        self.headers = dict(page.world.response_headers)
 
 
 class _StealthCtx:

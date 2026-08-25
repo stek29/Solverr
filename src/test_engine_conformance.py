@@ -12,7 +12,9 @@ capabilities, and they are tested where they live.
 Run: PYTHONPATH=src uv run --no-project python -m unittest test_engine_conformance
 """
 import base64
+import os
 import unittest
+from unittest.mock import patch
 
 from detection import (ACCESS_DENIED_SELECTORS, ACCESS_DENIED_TITLES,
                        CHALLENGE_SELECTORS, CHALLENGE_TITLES, TURNSTILE_SELECTORS)
@@ -125,6 +127,47 @@ class EngineConformanceTest(unittest.TestCase):
         for name, result, _ in self.each():
             seen[name] = sorted({k for c in result.cookies for k in c})
         self.assertEqual(len(set(map(tuple, seen.values()))), 1, seen)
+
+
+class ResponseHeaderConformanceTest(unittest.TestCase):
+    """The first feature written once under the shared seam.
+
+    The two engines get response headers from completely different places: the
+    Chrome engine reads the browser's CDP performance log, the stealth engine
+    reads the main-frame navigation response it already tracks. A client cannot
+    tell which one answered, so both have to say the same thing.
+    """
+
+    HEADERS = {"content-type": "text/html", "cf-ray": "abc123"}
+
+    def solved(self, enabled):
+        env = {"RESPONSE_HEADERS": "true"} if enabled else {}
+        for harness in HARNESSES:
+            with patch.dict(os.environ, env, clear=True):
+                yield harness.name, harness.solve(World(response_headers=dict(self.HEADERS)))
+
+    def test_off_by_default_both_report_an_empty_map(self):
+        # solution.headers has been {} since the fork; turning it on unasked
+        # would change every response.
+        for name, result in self.solved(enabled=False):
+            with self.subTest(engine=name):
+                self.assertEqual(result.headers, {})
+
+    def test_switched_on_both_report_the_real_headers(self):
+        for name, result in self.solved(enabled=True):
+            with self.subTest(engine=name):
+                self.assertEqual(result.headers, self.HEADERS)
+
+    def test_both_engines_agree_exactly(self):
+        got = dict(self.solved(enabled=True))
+        self.assertEqual(got["chrome"].headers, got["stealth"].headers)
+
+    def test_the_headers_describe_the_final_page(self):
+        # The Chrome engine sees one entry per document, and a cleared challenge
+        # leaves an earlier one behind; the last is the page the caller asked for.
+        for name, result in self.solved(enabled=True):
+            with self.subTest(engine=name):
+                self.assertNotIn("cf-mitigated", result.headers)
 
 
 class NavigationConformanceTest(unittest.TestCase):

@@ -17,6 +17,7 @@ VALUES = {
     Read.URL: "https://example-site.tld/",
     Read.USER_AGENT: "UA/1.0",
     Read.TOKEN: None,
+    Read.HEADERS: {"content-type": "text/html"},
     Read.WAIT: None,
     Read.BODY: ("<html/>", None),
     Read.SCREENSHOT: b"PNG",
@@ -87,13 +88,21 @@ class AssemblyResultTest(unittest.TestCase):
         result, _ = drive()
         self.assertEqual(result.status, 200)
 
-    def test_headers_are_an_empty_map(self):
+    def test_headers_come_from_the_engine(self):
+        # The kernel decides when headers are included, never what they are:
+        # one engine reads them off a CDP log and the other off a response.
         result, _ = drive()
-        self.assertEqual(result.headers, {})
+        self.assertEqual(result.headers, VALUES[Read.HEADERS])
 
     def test_only_cookies_leaves_the_headers_unset(self):
         result, _ = drive(returnOnlyCookies=True)
         self.assertIsNone(result.headers)
+
+    def test_only_cookies_does_not_even_read_the_headers(self):
+        # Reading them costs a log drain on one engine, so it is not done when
+        # the field is going to be dropped anyway.
+        _result, order = drive(returnOnlyCookies=True)
+        self.assertNotIn(Read.HEADERS, order)
 
     def test_only_cookies_leaves_the_body_unset(self):
         result, _ = drive(returnOnlyCookies=True)

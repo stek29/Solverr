@@ -6,6 +6,7 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ### Additions
 
+- **`RESPONSE_HEADERS=true` returns the page's real response headers in `solution.headers` instead of an empty map.** Both engines or neither, so the answer never depends on which one solved the request. Off by default, because the field has been empty since the fork and turning it on changes what the Chrome engine's browser does on every request.
 - **Slow sites can be given more patience per attempt with `BROWSER_WAIT_TIMEOUT` (default 1 second).** Applies to the Chrome engine, which waits a fixed moment for the challenge to clear before retrying; the stealth engine already polls until the request's own deadline. Raising it never extends `maxTimeout`.
 
 ### Fixes
@@ -17,6 +18,7 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 - **A request that sends both `cookies` and `tabs_till_verify` now returns a token for the page it actually hands back.** The token was read before the cookie reload, so it described a document that had already been replaced.
 - **A malformed `proxy` is now refused instead of quietly sending the request unproxied from the server's own address.** A proxy given as a plain string, or as an object with no `url`, used to read as "no proxy" and the solve went ahead and reported success, so nothing revealed that the traffic never went through it.
 - **Proxy credentials are no longer left behind on disk when a browser fails to start.** The temporary extension carrying the proxy username and password was only cleaned up after a successful launch.
+- **A browser behind an authenticated proxy now reports the timezone and language of the country it actually exits from.** The startup lookup that resolves them left the proxy credentials out, so with `PROXY_USERNAME` set it was refused and the fallback was cached for every request after it, leaving the browser claiming a country its address did not match.
 - **A session is no longer closed out from under a request that just picked it up.** Two separate moments allowed it: replacing a session that had outlived its lifetime, where the check for whether anything was using it and the replacement were separate steps, and simply being handed a session, which stayed idle for an instant after being found and so could be closed by the idle cleanup before the request could claim it. Either one failed a solve with an error the caller could do nothing about. Both engines were affected, and the stealth engine did not lock the first check at all.
 - **A request parameter of the wrong type is now refused by name instead of misbehaving or failing obscurely.** `"returnOnlyCookies": "false"` was truthy and dropped the response body, a numeric `url` reported a Python type rather than the parameter, and a bad `waitInSeconds` failed only after the challenge had already been solved. A misspelled parameter is now logged as ignored rather than passing silently.
 

@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import config
 import geo
 from engines import chrome_engine
 
@@ -376,3 +377,33 @@ class ChromeTimezoneTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class EnvProxyTest(unittest.TestCase):
+    """One reader for PROXY_URL and its credentials.
+
+    The startup timezone lookup used to build the dict itself and leave the
+    credentials out. geo caches per proxy *server*, not per credential set, so
+    an authenticated proxy refused that lookup and the fallback zone was cached
+    for every request after it.
+    """
+
+    def test_no_proxy_url_means_no_proxy(self):
+        with _env(PROXY_URL=None):
+            self.assertIsNone(config.env_proxy())
+
+    def test_a_bare_url_needs_no_credentials(self):
+        with patch.dict(os.environ, {'PROXY_URL': 'http://p:1'}, clear=True):
+            self.assertEqual(config.env_proxy(), {"url": "http://p:1"})
+
+    def test_credentials_are_carried(self):
+        with patch.dict(os.environ, {'PROXY_URL': 'http://p:1', 'PROXY_USERNAME': 'u',
+                                     'PROXY_PASSWORD': 'x'}, clear=True):
+            self.assertEqual(config.env_proxy(),
+                             {"url": "http://p:1", "username": "u", "password": "x"})
+
+    def test_the_startup_lookup_carries_them_too(self):
+        # The whole point: the cached zone must come from an authenticated lookup.
+        with patch.dict(os.environ, {'PROXY_URL': 'http://p:1', 'PROXY_USERNAME': 'u',
+                                     'PROXY_PASSWORD': 'x'}, clear=True):
+            self.assertIn('username', geo.proxy_to_config(config.env_proxy()))

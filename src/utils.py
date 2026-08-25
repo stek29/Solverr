@@ -11,6 +11,7 @@ import urllib.parse
 from selenium.webdriver.chrome.webdriver import WebDriver
 import undetected_chromedriver as uc
 
+import config
 import geo
 
 FLARESOLVERR_VERSION = None
@@ -166,6 +167,13 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
     # through verbatim and a single-element navigator.languages stands out.
     options.add_argument('--accept-lang=%s' % geo.accept_language(
         geo.browser_language(geo.proxy_to_config(proxy))))
+
+    if config.response_headers():
+        # The only way Selenium can see response headers: ask the browser to log
+        # network events, then read them back per request. Deliberately not
+        # undetected_chromedriver's enable_cdp_events, which also turns on browser
+        # logging and starts a polling thread per driver for events nothing reads.
+        options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
 
     # Fix for Chrome 117 | https://github.com/FlareSolverr/FlareSolverr/issues/910
     if USER_AGENT is not None:

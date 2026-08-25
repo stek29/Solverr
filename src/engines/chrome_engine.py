@@ -5,6 +5,7 @@ unchanged in behavior. It stays the default engine because it empirically clears
 the target sites best and already supports sessions, POST, cookie injection and
 screenshots.
 """
+import json
 import logging
 import time
 from datetime import timedelta
@@ -220,16 +221,50 @@ class ChromeEngine(Engine):
 
         # Order and field rules live in assembly.py, shared with the stealth
         # engine. Only the reads below are Chrome's, and none of them is a rule.
-        # headers stays an empty map: Selenium does not report the response ones.
         return assembly.run(req, message, {
             assembly.Read.URL: lambda: driver.current_url,
             assembly.Read.USER_AGENT: lambda: utils.get_user_agent(driver),
             assembly.Read.TOKEN: lambda: turnstile_token,
+            assembly.Read.HEADERS: lambda: _response_headers(driver),
             assembly.Read.WAIT: lambda: time.sleep(req.waitInSeconds),
             assembly.Read.BODY: lambda: (driver.page_source, None),
             assembly.Read.SCREENSHOT: lambda: driver.get_screenshot_as_png(),
             assembly.Read.COOKIES: lambda: driver.get_cookies(),
         })
+
+
+def _response_headers(driver: WebDriver) -> dict:
+    """The final document's response headers, or {} when the feature is off.
+
+    Selenium has no API for these, so the browser is asked at launch to log
+    network events (see get_webdriver) and the last main-document response is
+    picked out of that log here. Last rather than first: a challenge navigates
+    once it clears, so earlier entries describe pages the caller never asked for.
+
+    The log is drained by reading it, which is what keeps a long-lived session
+    from accumulating one entry per request for as long as it lives.
+    """
+    if not config.response_headers():
+        return {}
+    try:
+        entries = driver.get_log('performance')
+    except Exception:
+        logging.debug("performance log unavailable, reporting no response headers", exc_info=True)
+        return {}
+
+    headers = {}
+    for entry in entries:
+        try:
+            message = json.loads(entry['message'])['message']
+            if message.get('method') != 'Network.responseReceived':
+                continue
+            params = message.get('params') or {}
+            if params.get('type') != 'Document':
+                continue
+            headers = (params.get('response') or {}).get('headers') or headers
+        except Exception:
+            logging.debug("could not read a performance log entry", exc_info=True)
+    return headers
 
 
 def _apply_timezone(driver: WebDriver, proxy: dict = None) -> None:

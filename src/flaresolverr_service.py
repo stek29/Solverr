@@ -71,8 +71,7 @@ def test_browser_installation():
     # Resolve the browser timezone once here, the way the user agent is, so no
     # request pays for the egress lookup. A per-request proxy still resolves on
     # first use; the configured one is the common case.
-    env_proxy = {"url": os.environ.get('PROXY_URL')} if os.environ.get('PROXY_URL') else None
-    logging.info("Browser timezone: " + geo.browser_timezone(geo.proxy_to_config(env_proxy)))
+    logging.info("Browser timezone: " + geo.browser_timezone(geo.proxy_to_config(config.env_proxy())))
 
     logging.info("Test successful!")
 

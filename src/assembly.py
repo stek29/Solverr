@@ -19,8 +19,10 @@ The rules pinned here, all of which a client can observe:
 - `status` is 200 whenever a page came back. Clients reject non-2xx, and a
   Cloudflare 403 challenge page is a solve outcome rather than a solve failure;
   a real block is raised as an error by the denied detection before this runs.
-- `headers` is an empty map, and is absent entirely under `returnOnlyCookies`.
-  Neither engine reports real headers yet.
+- `headers` is absent entirely under `returnOnlyCookies`, and otherwise comes
+  from the engine: the real response headers when RESPONSE_HEADERS is on, an
+  empty map when it is off. Both engines answer the same question the same way,
+  so a client cannot tell which one solved its request.
 - The wait happens before the body is read, which is the point of asking for it.
 - **The cookie jar is read last**, after the wait and after everything else.
 - The screenshot is opt-in and is encoded here, so both engines hand over raw
@@ -39,6 +41,7 @@ class Read(Enum):
     USER_AGENT = auto()
     TOKEN = auto()
     WAIT = auto()
+    HEADERS = auto()       # the page's response headers, or {} when off
     BODY = auto()          # (text, content_type or None)
     SCREENSHOT = auto()    # raw bytes
     COOKIES = auto()       # already in the client's dialect
@@ -57,7 +60,7 @@ def assembly(req, message: str):
     result.turnstile_token = yield Read.TOKEN
 
     if not req.returnOnlyCookies:
-        result.headers = {}
+        result.headers = yield Read.HEADERS
         if req.waitInSeconds and req.waitInSeconds > 0:
             logging.info("Waiting %s seconds before returning the response...", req.waitInSeconds)
             yield Read.WAIT

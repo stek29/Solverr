@@ -469,12 +469,25 @@ class StealthEngine(Engine):
             async def cookies():
                 return _to_client_cookies(await ctx.context.cookies())
 
+            async def headers():
+                # Already tracked for PDF detection, so this costs nothing extra
+                # here. Gated on the same setting as the Chrome engine so a
+                # client cannot tell the two apart by what it gets back.
+                if not config.response_headers() or main_response is None:
+                    return {}
+                try:
+                    return dict(main_response.headers)
+                except Exception:
+                    logging.debug("could not read the response headers", exc_info=True)
+                    return {}
+
             # Order and field rules live in assembly.py, shared with the Chrome
             # engine. Only the reads below are this engine's.
             return await assembly.run_async(req, message, {
                 assembly.Read.URL: lambda: _value(page.url),
                 assembly.Read.USER_AGENT: user_agent,
                 assembly.Read.TOKEN: token,
+                assembly.Read.HEADERS: headers,
                 assembly.Read.WAIT: lambda: asyncio.sleep(req.waitInSeconds),
                 assembly.Read.BODY: body,
                 assembly.Read.SCREENSHOT: page.screenshot,

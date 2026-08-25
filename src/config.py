@@ -129,6 +129,46 @@ def browser_timezone() -> Optional[str]:
     return raw or None
 
 
+def response_headers() -> bool:
+    """Report the page's real response headers in `solution.headers`.
+
+    Read by both engines together and never by one alone. A client cannot tell
+    which engine answered a request, so headers appearing on one and not the
+    other would be a difference it could not explain or rely on.
+
+    Off by default for two reasons. The Chrome engine can only get them by
+    asking the browser to log network events at launch, which changes what the
+    browser is doing on every request and has not been measured against a
+    fingerprinting check. And `solution.headers` has been an empty map since the
+    fork, so populating it unasked would change every response.
+
+    A launch setting rather than a request field, because the Chrome half has to
+    be enabled before the browser starts.
+    """
+    return _bool('RESPONSE_HEADERS', False)
+
+
+def env_proxy() -> Optional[dict]:
+    """The configured proxy as a request-shaped dict, or None when unset.
+
+    One reader because the same rule was written out three times and the copies
+    disagreed: the startup timezone lookup built `{"url": ...}` without the
+    credentials, and geo caches per proxy *server* rather than per credential
+    set, so an authenticated proxy refused that lookup and the fallback zone and
+    language were cached for every request that followed. The browser then
+    reported a country its exit IP did not match, which is the one pairing sites
+    actually check.
+    """
+    url = os.environ.get('PROXY_URL')
+    if not url:
+        return None
+    username = os.environ.get('PROXY_USERNAME')
+    password = os.environ.get('PROXY_PASSWORD')
+    if username is None and password is None:
+        return {"url": url}
+    return {"url": url, "username": username, "password": password}
+
+
 def _int_env(name: str, default: int) -> int:
     raw = os.environ.get(name, str(default)).strip()
     try:

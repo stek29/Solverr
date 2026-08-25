@@ -220,7 +220,7 @@ Example response (truncated):
 }
 ```
 
-`solution.headers` is always empty. Neither engine reports the response headers today, and FlareSolverr has never populated it either; the field stays in the payload for compatibility.
+`solution.headers` is empty unless `RESPONSE_HEADERS=true`, which fills it on both engines or neither. FlareSolverr has never populated it, so the default keeps the payload identical to its.
 
 ### `request.post`
 
@@ -350,6 +350,7 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 | -------------------- | --------- | ----------------------------------------------------------------------------- |
 | `HEADLESS`           | `true`    | Run the Chrome engine headless (visible only for debugging).                   |
 | `DISABLE_MEDIA`      | `false`   | Block images/CSS/fonts by default to save bandwidth (both engines).            |
+| `RESPONSE_HEADERS`   | `false`   | Return the page's real response headers in `solution.headers` instead of an empty map. Both engines, or neither. Off by default: the Chrome engine gets them by having the browser log network events, which has not been measured against a fingerprinting check, and populating the field unasked would change every response. |
 | `BROWSER_WAIT_TIMEOUT` | `1`     | Seconds the Chrome engine waits for an expected page state on each attempt. Raise it on a slow host or a slow site. Chrome only: the stealth engine polls until the request's own deadline instead. It never extends `maxTimeout`. |
 | `BROWSER_GEO`        | none      | One tag setting the browser's language **and** timezone. Eg `de-DE`. See below. |
 | `LANG`               | none      | Browser language for both engines. Accepts `en_US.UTF-8` or `en-US`. See below. |
