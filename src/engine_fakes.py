@@ -52,6 +52,8 @@ class World:
     looks: list = field(default_factory=list)
     # One entry per navigation, so the cookie-reload rule is observable.
     navigations: list = field(default_factory=list)
+    # What the engine actually handed its browser, so a refused cookie shows up.
+    cookies_set: list = field(default_factory=list)
 
     def read_title(self) -> str:
         self.looks.append(1)
@@ -100,8 +102,9 @@ class _SeleniumDriver:
     def delete_cookie(self, _name):
         pass
 
-    def add_cookie(self, _cookie):
-        pass
+    def add_cookie(self, cookie):
+        # Selenium accepts a bare cookie and anchors it to the current page.
+        self._world.cookies_set.append(cookie)
 
     def execute_script(self, _script):
         pass
@@ -183,8 +186,13 @@ class _PlaywrightContext:
                         "expires": float(expiry) if expiry is not None else -1})
         return out
 
-    async def add_cookies(self, _cookies):
-        pass
+    async def add_cookies(self, cookies):
+        for cookie in cookies:
+            # Playwright's own rule, and it refuses the whole batch on one bad
+            # entry, which is what failed the request rather than the cookie.
+            if not cookie.get("url") and not (cookie.get("domain") and cookie.get("path")):
+                raise ValueError("Cookie should have a url or a domain/path pair")
+            self._page.world.cookies_set.append(cookie)
 
 
 class _PlaywrightPage:

@@ -192,6 +192,21 @@ class NavigationConformanceTest(unittest.TestCase):
             with self.subTest(engine=name):
                 self.assertEqual(count, 2)
 
+    def test_a_cookie_with_no_domain_is_accepted_by_both(self):
+        """The shape the README documents, and the one clients actually send.
+
+        Playwright refuses a cookie carrying neither a url nor a domain/path
+        pair, and refuses the whole batch with it, so this failed the entire
+        request on the stealth engine while working on the Chrome one. Selenium
+        anchors such a cookie to the page it is on; the stealth engine now does
+        the same rather than handing the browser something it will reject.
+        """
+        for harness in HARNESSES:
+            with self.subTest(engine=harness.name):
+                world = World()
+                harness.solve(world, cookies=[{"name": "a", "value": "1"}])
+                self.assertEqual(len(world.cookies_set), 1)
+
     def test_an_empty_cookie_list_does_not_force_one(self):
         for name, count in self.navigations(cookies=[]):
             with self.subTest(engine=name):

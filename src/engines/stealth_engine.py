@@ -102,13 +102,28 @@ def _to_client_cookies(cookies: list) -> list:
     return converted
 
 
-def _to_playwright_cookies(cookies: list) -> list:
-    """Client-supplied cookies to Playwright's shape, accepting either dialect."""
+def _to_playwright_cookies(cookies: list, url: str) -> list:
+    """Client-supplied cookies to Playwright's shape, accepting either dialect.
+
+    Anchored to ``url`` when the caller did not say where a cookie belongs.
+    Playwright refuses a cookie carrying neither a url nor a domain/path pair,
+    and refuses the whole batch, so `{"name": "a", "value": "1"}` (the shape the
+    README documents and the one FlareSolverr clients send) failed the entire
+    request on this engine while working on the Chrome one. Selenium's add_cookie
+    defaults such a cookie to the page it is on, so anchoring to the request URL
+    is the same behaviour, not a new one. A domain without a path gets Selenium's
+    default of "/" for the same reason.
+    """
     converted = []
     for cookie in cookies:
         translated = {k: v for k, v in cookie.items() if k in _PLAYWRIGHT_COOKIE_KEYS}
         if "expires" not in translated and cookie.get("expiry") is not None:
             translated["expires"] = float(cookie["expiry"])
+        if not translated.get("url"):
+            if translated.get("domain"):
+                translated.setdefault("path", "/")
+            else:
+                translated["url"] = url
         converted.append(translated)
     return converted
 
@@ -382,7 +397,8 @@ class StealthEngine(Engine):
             await pipeline.run_async(
                 {pipeline.Step.NAVIGATE: lambda _arg: navigate(page),
                  pipeline.Step.SET_COOKIES:
-                     lambda cookies: ctx.context.add_cookies(_to_playwright_cookies(cookies))},
+                     lambda cookies: ctx.context.add_cookies(
+                         _to_playwright_cookies(cookies, req.url))},
                 kernel=pipeline.approach, req=req)
 
             if utils.get_config_log_html():

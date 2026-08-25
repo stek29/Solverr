@@ -26,6 +26,7 @@ from engines.chrome_engine import ChromeEngine, _TURNSTILE_SELECTOR
 from engines.stealth_engine import _to_client_cookies, _to_playwright_cookies
 
 PDF_BYTES = b"%PDF-1.4 fake document"
+PAGE_URL = "https://example.tld/page"
 
 PLAYWRIGHT_COOKIE = {"name": "cf_clearance", "value": "abc", "domain": ".example.tld",
                      "path": "/", "expires": 1893456000.5, "httpOnly": True,
@@ -94,10 +95,41 @@ class CookieShapeTest(unittest.TestCase):
         self.assertNotIn('expiry', _to_client_cookies([session_cookie])[0])
 
     def test_client_cookie_expiry_is_translated_for_playwright(self):
-        self.assertEqual(_to_playwright_cookies([SELENIUM_COOKIE])[0]['expires'], 1893456000.0)
+        self.assertEqual(_to_playwright_cookies([SELENIUM_COOKIE], PAGE_URL)[0]['expires'],
+                         1893456000.0)
 
     def test_client_cookie_drops_keys_playwright_rejects(self):
-        self.assertNotIn('expiry', _to_playwright_cookies([SELENIUM_COOKIE])[0])
+        self.assertNotIn('expiry', _to_playwright_cookies([SELENIUM_COOKIE], PAGE_URL)[0])
+
+    def test_a_cookie_with_no_domain_is_anchored_to_the_page(self):
+        # Playwright refuses the whole batch without a url or domain/path pair,
+        # so this shape (the one the README documents) used to fail the request.
+        # Selenium defaults it to the page being loaded; this matches that.
+        translated = _to_playwright_cookies([{"name": "a", "value": "1"}], PAGE_URL)[0]
+        self.assertEqual(translated['url'], PAGE_URL)
+
+    def test_an_anchored_cookie_invents_no_domain(self):
+        # url and domain are alternatives; sending both is what Playwright rejects.
+        translated = _to_playwright_cookies([{"name": "a", "value": "1"}], PAGE_URL)[0]
+        self.assertNotIn('domain', translated)
+
+    def test_a_domain_without_a_path_gets_the_default_one(self):
+        translated = _to_playwright_cookies([{"name": "a", "value": "1",
+                                              "domain": ".example.tld"}], PAGE_URL)[0]
+        self.assertEqual(translated['path'], '/')
+
+    def test_a_domain_without_a_path_is_not_anchored_to_the_page(self):
+        translated = _to_playwright_cookies([{"name": "a", "value": "1",
+                                              "domain": ".example.tld"}], PAGE_URL)[0]
+        self.assertNotIn('url', translated)
+
+    def test_a_caller_supplied_url_is_left_alone(self):
+        translated = _to_playwright_cookies([{"name": "a", "value": "1",
+                                              "url": "https://other.tld/"}], PAGE_URL)[0]
+        self.assertEqual(translated['url'], "https://other.tld/")
+
+    def test_a_full_cookie_is_not_anchored(self):
+        self.assertNotIn('url', _to_playwright_cookies([SELENIUM_COOKIE], PAGE_URL)[0])
 
 
 _CLOCK_START = 1000.0
