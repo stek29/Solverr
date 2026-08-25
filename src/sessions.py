@@ -54,7 +54,8 @@ class SessionStore:
         self._lock = threading.Lock()
 
     def create(self, session_id: Optional[str] = None, proxy: Optional[dict] = None,
-               force_new: Optional[bool] = False) -> Tuple[Session, bool]:
+               force_new: Optional[bool] = False,
+               claim: bool = False) -> Tuple[Session, bool]:
         """create creates new instance of WebDriver if necessary,
         assign defined (or newly generated) session_id to the instance
         and returns the session object. If a new session has been created
@@ -72,8 +73,14 @@ class SessionStore:
 
         with self._lock:
             existing = self.sessions.get(session_id)
-        if existing is not None:
-            return existing, False
+            if existing is not None:
+                # Claimed before the lock is released, never after. A session
+                # handed back unclaimed is findable and idle for that instant,
+                # which is long enough for the reaper or the cap to close its
+                # browser before the caller can say it is using it.
+                if claim:
+                    self._claim(existing)
+                return existing, False
 
         # Build outside the lock (launching a browser takes seconds).
         session = Session(session_id, self._build(proxy), datetime.now())
@@ -82,6 +89,8 @@ class SessionStore:
             race = self.sessions.get(session_id)
             if race is None:
                 self.sessions[session_id] = session
+            if claim:
+                self._claim(race if race is not None else session)
         if race is not None:
             # Another thread created the session while we were launching ours;
             # discard the extra browser and use theirs.
@@ -89,6 +98,11 @@ class SessionStore:
             return race, False
 
         return session, True
+
+    def _claim(self, session: Session) -> None:
+        """Mark a session in use. The caller must hold the lock."""
+        session.last_used = datetime.now()
+        session.in_use += 1
 
     def exists(self, session_id: str) -> bool:
         with self._lock:
@@ -121,16 +135,16 @@ class SessionStore:
         request before it exists is born that way, which is silent: the browser
         still solves, just from the server's own address.
         """
-        session, fresh = self.create(session_id, proxy)
+        # claim=True: the session comes back already marked, taken under the same
+        # lock that found or stored it. Marking here instead left it findable and
+        # idle for an instant, which the reaper or the cap can use to close its
+        # browser before the caller ever says it is in use.
+        session, fresh = self.create(session_id, proxy, claim=True)
 
-        # Take the mark and judge the lifetime under one acquisition. Reading
-        # "is anyone on it" and then acting on the answer let another request
-        # take the session in between and have its browser quit underneath it,
-        # which is the failure the mark exists to prevent. in_use == 1 is what
-        # makes this request the only holder, so replacing is safe.
+        # A second acquisition is safe now, because the mark is held throughout:
+        # nothing can evict this session, and in_use == 1 says this request is
+        # its only holder, so replacing it cannot pull it out from under another.
         with self._lock:
-            session.last_used = datetime.now()
-            session.in_use += 1
             expired = (ttl is not None and not fresh
                        and session.lifetime() > ttl and session.in_use == 1)
             if expired:
@@ -147,11 +161,7 @@ class SessionStore:
         logging.debug("session's lifetime has expired, so the session is recreated (session_id=%s)",
                       session_id)
         self._teardown(session)
-        session, fresh = self.create(session_id, proxy)
-        with self._lock:
-            session.last_used = datetime.now()
-            session.in_use += 1
-        return session, fresh
+        return self.create(session_id, proxy, claim=True)
 
     def touch(self, session_id: str) -> None:
         with self._lock:

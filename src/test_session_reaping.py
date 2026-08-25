@@ -235,3 +235,41 @@ class ExpiryRaceUnderConcurrency(unittest.TestCase):
             with self.subTest(window=release_index):
                 for session in self.run_with_visitor_at(release_index):
                     session.payload.quit.assert_not_called()
+
+
+class ReapRaceOnHandout(unittest.TestCase):
+    """A session handed out is never one the reaper has just closed.
+
+    A session that is found but not yet marked is idle as far as the reaper and
+    the cap are concerned. Handing it back before marking it left that instant
+    open, and a request could be given a browser that was already closing.
+    """
+
+    def store_with_an_idle_session(self):
+        store = SessionStore(build=lambda proxy=None: MagicMock(),
+                             teardown=lambda payload: payload.quit())
+        store.create("shared")
+        # Idle long enough that the reaper would take it if it were unmarked.
+        store.sessions["shared"].last_used = datetime.now() - timedelta(hours=2)
+        return store
+
+    def run_with_reaper_at(self, release_index):
+        store = self.store_with_an_idle_session()
+
+        def visitor():
+            store.reap_idle(timedelta(minutes=1))
+
+        store._lock = _WindowLock(release_index, visitor)
+        return store, store.get("shared")
+
+    def test_no_window_hands_out_a_reaped_browser(self):
+        for release_index in range(1, 8):
+            with self.subTest(window=release_index):
+                _store, (session, _fresh) = self.run_with_reaper_at(release_index)
+                session.payload.quit.assert_not_called()
+
+    def test_the_session_handed_out_is_the_one_in_the_pool(self):
+        for release_index in range(1, 8):
+            with self.subTest(window=release_index):
+                store, (session, _fresh) = self.run_with_reaper_at(release_index)
+                self.assertIs(store.sessions.get("shared"), session)

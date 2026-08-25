@@ -180,9 +180,16 @@ live-checked.
    prevent, and the case that motivated it, the same id living in both pools after a fallback, is
    legitimate and no identity type fixes it.
 
-   The race test is worth knowing about: rather than threads and timing, `_WindowLock` runs a second
-   request at each lock release in turn, which is deterministic and fails at window 2 on the old
-   code, the release right after the busy check.
+   A second window was closed straight after, found while writing up the first: a session was
+   handed back from `create` before being marked in use, so for that instant it was findable and
+   idle, and the reaper or the cap could close its browser before the caller claimed it. `create`
+   now claims under the same acquisition that finds or stores the session, so there is no unmarked
+   moment at all.
+
+   The race tests are worth knowing about: rather than threads and timing, `_WindowLock` runs
+   another operation at each lock release in turn, which is deterministic. The expiry race fails at
+   window 2 on the old code, the release right after the busy check; the handout race fails at
+   window 1, the release right after `create` finds the session.
 6. **Config, then `RESPONSE_HEADERS`** as the first feature written once under the new rule, which
    is what proves the seam works.
 
