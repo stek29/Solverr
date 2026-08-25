@@ -98,8 +98,9 @@ Current homes and where they land.
 - Sessions: `sessions.py` and the stealth engine's own pool become one registry keyed by
   `SessionRef`.
 - Unchanged: `geo.py`, `postform.py`, `passthrough.py`, `utils.py` and the vendored driver.
-- Enforcement: one conformance suite parameterized over both engines, asserting the rules the spine
-  cannot reach by construction.
+- Enforcement: `src/test_engine_conformance.py` over both engines, driven by `src/engine_fakes.py`,
+  asserting the rules the spine cannot reach by construction. A rule that moves into the spine in a
+  later step stays asserted here, which is what makes the move checkable.
 
 ## Sequencing
 
@@ -115,8 +116,12 @@ live-checked.
    contract takes additive optional fields. The validation lives next to the annotations rather
    than in a new `api/` package: moving files and changing behaviour in one diff would make both
    harder to review, so the package reshape is a later, behaviour-free move.
-2. **Conformance suite against today's engines.** Characterisation before movement, so every later
-   step has something that fails before `/live-check` does.
+2. **Conformance suite against today's engines.** Done 2026-08-25. `test_engine_conformance.py`
+   runs sixteen assertions over both engines through `engine_fakes.py`, which drives each one
+   browser-free from a single neutral `World` and renders it in that browser's own dialect. The
+   Chrome-only cookie tests it supersedes were deleted rather than left beside it, so the rules it
+   covers are pinned once. Verified by mutation on each engine separately: moving either engine's
+   cookie read back before the wait turns the suite red and names that engine.
 3. **Result assembly.** `assemble` extracted; both engines call it. This is the step that makes the
    cookie-ordering class unwritable.
 4. **Solve orchestration.** The spine owns the order; engines expose primitives.

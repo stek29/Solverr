@@ -68,7 +68,9 @@ nothing.
   rules on it because it looks unified.
 - **A rule that must hold for both engines exists once**, in this order of preference: a shared
   kernel both call, a typed capability the protocol forces both to answer, or one conformance test
-  parameterized over both adapters. A hand-written pair is the last resort and it drifts.
+  parameterized over both adapters. A hand-written pair is the last resort and it drifts. The
+  conformance rung is `src/test_engine_conformance.py`, driven by `src/engine_fakes.py`; add to it
+  rather than writing a second per-engine test, and delete the per-engine test it supersedes.
 - **Parity is the default; a gap needs a ruling to stay open.** A gap you notice on a surface you are
   touching is levelled up in that change unless the owner gates it.
 - **A decline expires with its evidence.** Record the premise with the decline and treat the decline

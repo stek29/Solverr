@@ -2,9 +2,12 @@
 
 Covers the things that are easy to break silently: the /v1 payload for an
 ordinary HTML solve must stay byte-identical to FlareSolverr's (no extra keys),
-a non-HTML document must survive the trip through the passthrough as bytes,
-cookies must look the same whichever engine solved the request, and the cookies
-must be read after waitInSeconds rather than before it.
+a non-HTML document must survive the trip through the passthrough as bytes, and
+the cookie dialect translation is exact.
+
+Rules that must hold on both engines are pinned once in test_engine_conformance,
+not here. What stays is the serialization shape and the Chrome-only
+tabs_till_verify path, which is a capability rather than a shared rule.
 
 Run: PYTHONPATH=src uv run --no-project python -m unittest test_response_shape
 """
@@ -95,62 +98,6 @@ class CookieShapeTest(unittest.TestCase):
 
     def test_client_cookie_drops_keys_playwright_rejects(self):
         self.assertNotIn('expiry', _to_playwright_cookies([SELENIUM_COOKIE])[0])
-
-
-class _FakeDriver:
-    """The slice of the Selenium API an unchallenged solve touches.
-
-    Its cookie jar changes while waitInSeconds runs, which is what makes the
-    ordering observable: read the jar too early and the late cookie is missing.
-    """
-
-    def __init__(self):
-        self.title = "Example"
-        self.current_url = "https://example.tld/"
-        self.page_source = "<html/>"
-        self.waited = False
-
-    def get(self, url):
-        pass
-
-    def find_element(self, *args):
-        return object()
-
-    def find_elements(self, *args):
-        return []
-
-    def get_cookies(self):
-        jar = [{"name": "early", "value": "1"}]
-        if self.waited:
-            jar.append({"name": "late", "value": "1"})
-        return jar
-
-
-class CookieCaptureTimingTest(unittest.TestCase):
-    """A page that sets a cookie from its own JS does it during waitInSeconds."""
-
-    def _solve(self, **req_fields):
-        driver = _FakeDriver()
-        # disableMedia is pinned so an ambient DISABLE_MEDIA cannot send the
-        # solve down the CDP branch this fake driver does not implement.
-        fields = {"url": "https://example.tld/", "waitInSeconds": 1, "disableMedia": False}
-        fields.update(req_fields)
-
-        def _wait(_seconds):
-            driver.waited = True
-
-        with patch('engines.chrome_engine.time.sleep', side_effect=_wait), \
-                patch.object(utils, 'get_user_agent', return_value="ua"):
-            return ChromeEngine(sessions=None)._evil_logic(
-                V1RequestBase(fields), driver, "GET", 60.0)
-
-    def test_cookies_set_during_the_wait_are_returned(self):
-        names = [c["name"] for c in self._solve().cookies]
-        self.assertIn("late", names)
-
-    def test_cookies_are_returned_when_only_cookies_were_asked_for(self):
-        names = [c["name"] for c in self._solve(returnOnlyCookies=True).cookies]
-        self.assertEqual(names, ["early"])
 
 
 _CLOCK_START = 1000.0
