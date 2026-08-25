@@ -4,6 +4,8 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+## [1.6.0]
+
 ### Additions
 
 - **`RESPONSE_HEADERS=true` returns the page's real response headers in `solution.headers` instead of an empty map.** Both engines or neither, so the answer never depends on which one solved the request. Off by default, because the field has been empty since the fork and turning it on changes what the Chrome engine's browser does on every request.
