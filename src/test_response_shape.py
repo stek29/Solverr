@@ -12,12 +12,14 @@ import base64
 import unittest
 from unittest.mock import patch
 
+from selenium.common import NoSuchElementException, StaleElementReferenceException
+
 import flaresolverr_service
 import passthrough
 import utils
 from dtos import STATUS_OK, V1RequestBase, V1ResponseBase
 from engines.base import SolveResult
-from engines.chrome_engine import ChromeEngine
+from engines.chrome_engine import ChromeEngine, _TURNSTILE_SELECTOR
 from engines.stealth_engine import _to_client_cookies, _to_playwright_cookies
 
 PDF_BYTES = b"%PDF-1.4 fake document"
@@ -139,7 +141,8 @@ class CookieCaptureTimingTest(unittest.TestCase):
 
         with patch('engines.chrome_engine.time.sleep', side_effect=_wait), \
                 patch.object(utils, 'get_user_agent', return_value="ua"):
-            return ChromeEngine(sessions=None)._evil_logic(V1RequestBase(fields), driver, "GET")
+            return ChromeEngine(sessions=None)._evil_logic(
+                V1RequestBase(fields), driver, "GET", 60.0)
 
     def test_cookies_set_during_the_wait_are_returned(self):
         names = [c["name"] for c in self._solve().cookies]
@@ -148,6 +151,158 @@ class CookieCaptureTimingTest(unittest.TestCase):
     def test_cookies_are_returned_when_only_cookies_were_asked_for(self):
         names = [c["name"] for c in self._solve(returnOnlyCookies=True).cookies]
         self.assertEqual(names, ["early"])
+
+
+_CLOCK_START = 1000.0
+
+
+class _FakeClock:
+    """Deterministic stand-in for the time module the Chrome engine uses."""
+
+    def __init__(self):
+        self.now = _CLOCK_START
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+# What one press costs browser-side in ActionChains pauses (pause(5) plus the
+# per-tab pauses and pause(1)). A fake driver makes ActionChains raise at once,
+# so without charging it here a modelled press is far cheaper than a real one,
+# and a loop that overruns its deadline by a press looks like it fits.
+_PRESS_SECONDS = 6.0
+
+
+class _FakeSwitchTo:
+    def __init__(self, driver):
+        self._driver = driver
+
+    def default_content(self):
+        # click_verify always lands here, so it counts one press attempt without
+        # the test having to reach inside ActionChains.
+        self._driver.verify_attempts += 1
+        self._driver.clock.sleep(_PRESS_SECONDS)
+
+
+class _FakeElement:
+    def __init__(self, value):
+        self._value = value
+
+    def get_attribute(self, _name):
+        return self._value
+
+
+class _FakeTurnstileDriver:
+    """A page carrying a Turnstile widget, with controllable timing.
+
+    `missing_lookups` is how many lookups happen before the input exists, which
+    models a widget injected after the page finished loading. `solves_after` is
+    how many verify presses fill it, or None for a widget that never solves.
+    `stale_on` names lookups that raise as if the page re-rendered underneath.
+    """
+
+    def __init__(self, clock, missing_lookups=0, solves_after=1, stale_on=()):
+        self.title = "Example"
+        self.current_url = "https://example.tld/"
+        self.page_source = "<html/>"
+        self.clock = clock
+        self.switch_to = _FakeSwitchTo(self)
+        self.verify_attempts = 0
+        self.navigations = 0
+        self.lookups = 0
+        self.navigations_at_first_lookup = None
+        self._missing_lookups = missing_lookups
+        self._solves_after = solves_after
+        self._stale_on = set(stale_on)
+
+    def get(self, _url):
+        self.navigations += 1
+
+    def delete_cookie(self, _name):
+        pass
+
+    def add_cookie(self, _cookie):
+        pass
+
+    def execute_script(self, _script):
+        pass
+
+    def get_cookies(self):
+        return []
+
+    def find_elements(self, *_args):
+        return []
+
+    def find_element(self, _by, value):
+        if value != _TURNSTILE_SELECTOR:
+            return object()
+        self.lookups += 1
+        if self.navigations_at_first_lookup is None:
+            self.navigations_at_first_lookup = self.navigations
+        if self.lookups in self._stale_on:
+            raise StaleElementReferenceException("the page re-rendered")
+        if self.lookups <= self._missing_lookups:
+            raise NoSuchElementException("widget not rendered yet")
+        solved = (self._solves_after is not None
+                  and self.verify_attempts >= self._solves_after)
+        return _FakeElement("PROBE_TOKEN" if solved else "")
+
+
+class TurnstileTokenTest(unittest.TestCase):
+    """The Chrome engine's tabs_till_verify path."""
+
+    def setUp(self):
+        self.clock = _FakeClock()
+
+    def _driver(self, **kwargs):
+        return _FakeTurnstileDriver(self.clock, **kwargs)
+
+    def _solve(self, driver, timeout=30.0, **req_fields):
+        fields = {"url": "https://example.tld/", "disableMedia": False,
+                  "tabs_till_verify": 1}
+        fields.update(req_fields)
+        # The render grace is real wall-clock inside WebDriverWait, so shorten it
+        # here: these cover whether a late widget is found, not how long the
+        # engine is willing to wait for one.
+        with patch('engines.chrome_engine._WIDGET_RENDER_SECONDS', 1.0), \
+                patch('engines.chrome_engine.time', self.clock), \
+                patch.object(utils, 'get_user_agent', return_value="ua"):
+            return ChromeEngine(sessions=None)._evil_logic(
+                V1RequestBase(fields), driver, "GET", timeout)
+
+    def test_widget_that_renders_after_page_load_is_still_found(self):
+        self.assertEqual(self._solve(self._driver(missing_lookups=1)).turnstile_token,
+                         "PROBE_TOKEN")
+
+    def test_page_without_a_widget_reports_no_token(self):
+        self.assertIsNone(self._solve(self._driver(missing_lookups=99)).turnstile_token)
+
+    def test_widget_that_never_solves_gives_up_instead_of_spinning(self):
+        self.assertIsNone(
+            self._solve(self._driver(solves_after=None), timeout=4.0).turnstile_token)
+
+    def test_widget_that_never_solves_still_returns_a_page(self):
+        self.assertEqual(
+            self._solve(self._driver(solves_after=None), timeout=4.0).status, 200)
+
+    def test_pressing_stops_inside_the_request_budget(self):
+        # A press costs more than the margin left for building the response, so
+        # a loop that checks only at the top of a pass overruns by a whole press
+        # and gets killed by func_timeout instead of returning a page.
+        self._solve(self._driver(solves_after=None), timeout=32.0)
+        self.assertLessEqual(self.clock.now - _CLOCK_START, 32.0)
+
+    def test_a_read_that_races_a_rerender_is_not_fatal(self):
+        self.assertEqual(self._solve(self._driver(stale_on=(2,))).turnstile_token,
+                         "PROBE_TOKEN")
+
+    def test_token_is_resolved_after_the_cookie_reload(self):
+        driver = self._driver()
+        self._solve(driver, cookies=[{"name": "a", "value": "1"}])
+        self.assertEqual(driver.navigations_at_first_lookup, 2)
 
 
 if __name__ == '__main__':

@@ -12,6 +12,9 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 - **Cookies a page sets from its own JavaScript during `waitInSeconds` are now returned instead of missed.** Both engines read the cookie jar before that wait, so a request could get back the page that set a cookie together with a cookie list that did not have it.
 - **A `tabs_till_verify` request no longer loses the Turnstile checkbox after its first failed attempt.** Each retry added another focusable element to the page, which moved the checkbox further along the tab order every time, so only the first attempt could reach it.
+- **A `tabs_till_verify` request now finds a Turnstile widget that appears after the page has loaded, instead of answering "Challenge not detected!" with no token.** The widget was looked for once, the instant navigation finished, which is before the site has injected it; it now gets up to 5 seconds to show up. A read that races the page re-rendering no longer fails the whole request either.
+- **A Turnstile checkbox that never yields a token no longer holds the request for its entire `maxTimeout`.** Pressing now stops in time to return the page and let the other engine try, rather than retrying until the budget runs out.
+- **A request that sends both `cookies` and `tabs_till_verify` now returns a token for the page it actually hands back.** The token was read before the cookie reload, so it described a document that had already been replaced.
 
 ### Other
 

@@ -8,9 +8,11 @@ screenshots.
 import logging
 import time
 from datetime import timedelta
+from typing import Optional
 
 from func_timeout import FunctionTimedOut, func_timeout
-from selenium.common import TimeoutException
+from selenium.common import (NoSuchElementException, StaleElementReferenceException,
+                             TimeoutException)
 from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -27,6 +29,24 @@ from detection import (ACCESS_DENIED_TITLES, ACCESS_DENIED_SELECTORS,
 from dtos import V1RequestBase
 from engines.base import Engine, SolveResult
 from postform import build_post_html
+
+# One CSS list rather than a selector-by-selector sweep, so the wait below is
+# bounded once no matter how long TURNSTILE_SELECTORS grows.
+_TURNSTILE_SELECTOR = ", ".join(TURNSTILE_SELECTORS)
+
+# How long to let a Turnstile widget appear before deciding the page has none.
+# driver.get() returns at readyState complete, but a widget injected by
+# Cloudflare's api.js lands after that: measured 2026-08-25 over four samples,
+# the token input showed up 0.01s to 0.92s after get() returned. Five seconds is
+# the same grace the stealth engine gives it through its networkidle settle
+# (_NETWORKIDLE_MS), and only a request that asked for tabs_till_verify can wait
+# it out on a page that turns out to have no widget at all.
+_WIDGET_RENDER_SECONDS = 5
+
+# Left on the request budget for building the response once the token loop gives
+# up, so an unsolved widget returns a page instead of tripping func_timeout.
+# Mirrors the stealth engine's own deadline margin.
+_TOKEN_DEADLINE_MARGIN_SECONDS = 3
 
 
 class ChromeEngine(Engine):
@@ -62,7 +82,7 @@ class ChromeEngine(Engine):
                 driver = utils.get_webdriver(req.proxy)
                 logging.debug('New instance of webdriver has been created to perform the request')
             _apply_timezone(driver, req.proxy)
-            return func_timeout(timeout, self._evil_logic, (req, driver, method))
+            return func_timeout(timeout, self._evil_logic, (req, driver, method, timeout))
         except FunctionTimedOut:
             raise Exception(f'Error solving the challenge. Timeout after {timeout} seconds.')
         except Exception as e:
@@ -76,8 +96,10 @@ class ChromeEngine(Engine):
                 driver.quit()
                 logging.debug('A used instance of webdriver has been destroyed')
 
-    def _evil_logic(self, req: V1RequestBase, driver: WebDriver, method: str) -> SolveResult:
+    def _evil_logic(self, req: V1RequestBase, driver: WebDriver, method: str,
+                    timeout: float) -> SolveResult:
         message = ""
+        started = time.monotonic()
 
         # optionally block resources like images/css/fonts using CDP
         disable_media = utils.get_config_disable_media()
@@ -112,10 +134,7 @@ class ChromeEngine(Engine):
         if method == "POST":
             _post_request(req, driver)
         else:
-            if req.tabs_till_verify is None:
-                driver.get(req.url)
-            else:
-                turnstile_token = _resolve_turnstile_captcha(req, driver)
+            driver.get(req.url)
 
         # set cookies if required
         if req.cookies is not None and len(req.cookies) > 0:
@@ -128,6 +147,13 @@ class ChromeEngine(Engine):
                 _post_request(req, driver)
             else:
                 driver.get(req.url)
+
+        # After the cookie reload, not before it: the reload replaces the document,
+        # so a token resolved first described a page that no longer exists by the
+        # time it was returned. POST is left out, as it was before.
+        if method != "POST" and req.tabs_till_verify is not None:
+            deadline = started + max(1.0, timeout - _TOKEN_DEADLINE_MARGIN_SECONDS)
+            turnstile_token = _resolve_turnstile_captcha(driver, req.tabs_till_verify, deadline)
 
         # wait for the page
         if utils.get_config_log_html():
@@ -288,12 +314,58 @@ def click_verify(driver: WebDriver, num_tabs: int = 1):
     time.sleep(2)
 
 
-def _get_turnstile_token(driver: WebDriver, tabs: int):
-    token_input = driver.find_element(By.CSS_SELECTOR, "input[name='cf-turnstile-response']")
-    current_value = token_input.get_attribute("value")
-    while True:
+def _has_turnstile_widget(driver: WebDriver) -> bool:
+    """Whether a Turnstile widget is on the page, waiting briefly for a late one.
+
+    The read used to happen the instant driver.get() returned, which is before
+    Cloudflare's api.js has injected the token input, so a widget that renders
+    asynchronously was reported as no widget at all and the request answered
+    "Challenge not detected!" with an empty token. WebDriverWait evaluates once
+    before it sleeps, so a widget already in the DOM costs nothing here.
+    """
+    try:
+        WebDriverWait(driver, _WIDGET_RENDER_SECONDS).until(
+            presence_of_element_located((By.CSS_SELECTOR, _TURNSTILE_SELECTOR)))
+        return True
+    except TimeoutException:
+        return False
+
+
+def _turnstile_token_value(driver: WebDriver) -> Optional[str]:
+    """Current value of the Turnstile token input, or None if it cannot be read.
+
+    Located fresh on every call. Holding the element across the retry loop let a
+    re-render raise StaleElementReferenceException out of the whole request,
+    where a read that raced one only ever means "not solved yet" to the caller.
+    """
+    try:
+        element = driver.find_element(By.CSS_SELECTOR, _TURNSTILE_SELECTOR)
+        return element.get_attribute("value") or None
+    except (NoSuchElementException, StaleElementReferenceException):
+        logging.debug("turnstile token read raced a navigation", exc_info=True)
+        return None
+
+
+def _get_turnstile_token(driver: WebDriver, tabs: int, deadline: float) -> Optional[str]:
+    """Press the checkbox until the token changes, or the budget runs out.
+
+    Returns None on the deadline rather than raising: an unsolved widget is a
+    result the controller can retry on the other engine, while an exception here
+    becomes a generic solve error. The loop was previously unbounded, which only
+    stayed survivable because a widget that rendered late was never found at all.
+
+    A pass is only started when the previous one's duration still fits, because
+    one costs about nine seconds (click_verify's own pauses) and checking only at
+    the top overran the deadline by a full pass. Measured against a live widget:
+    that overrun was enough to trip func_timeout and turn "no token" into a
+    timeout error. The first pass always runs, so a tiny budget still tries once.
+    """
+    current_value = _turnstile_token_value(driver)
+    pass_seconds = 0.0
+    while time.monotonic() + pass_seconds < deadline:
+        pass_started = time.monotonic()
         click_verify(driver, num_tabs=tabs)
-        turnstile_token = token_input.get_attribute("value")
+        turnstile_token = _turnstile_token_value(driver)
         if turnstile_token:
             if turnstile_token != current_value:
                 logging.info(f"Turnstile token: {turnstile_token}")
@@ -320,26 +392,18 @@ def _get_turnstile_token(driver: WebDriver, tabs: int):
             el.focus();
         """)
         time.sleep(1)
+        pass_seconds = time.monotonic() - pass_started
+    logging.warning("Turnstile checkbox did not produce a token within the request budget")
+    return None
 
 
-def _resolve_turnstile_captcha(req: V1RequestBase, driver: WebDriver):
-    turnstile_token = None
-    if req.tabs_till_verify is not None:
-        logging.debug(f'Navigating to... {req.url} in order to pass the turnstile challenge')
-        driver.get(req.url)
-
-        turnstile_challenge_found = False
-        for selector in TURNSTILE_SELECTORS:
-            found_elements = driver.find_elements(By.CSS_SELECTOR, selector)
-            if len(found_elements) > 0:
-                turnstile_challenge_found = True
-                logging.info("Turnstile challenge detected. Selector found: " + selector)
-                break
-        if turnstile_challenge_found:
-            turnstile_token = _get_turnstile_token(driver=driver, tabs=req.tabs_till_verify)
-        else:
-            logging.debug(f'Turnstile challenge not found')
-    return turnstile_token
+def _resolve_turnstile_captcha(driver: WebDriver, tabs: int, deadline: float) -> Optional[str]:
+    """The Turnstile token for a page that carries a widget, or None."""
+    if not _has_turnstile_widget(driver):
+        logging.debug('Turnstile challenge not found')
+        return None
+    logging.info("Turnstile challenge detected. Selector found: " + _TURNSTILE_SELECTOR)
+    return _get_turnstile_token(driver=driver, tabs=tabs, deadline=deadline)
 
 
 def _post_request(req: V1RequestBase, driver: WebDriver):

@@ -191,7 +191,7 @@ Shuts a session's browser down and frees its resources.
 | proxy               | Optional. Same shape as in `sessions.create`. Ignored when `session` is set (use a session proxy instead).                                                       |
 | waitInSeconds       | Optional. Extra seconds to wait after solving, before returning (lets dynamic content load).                                                                     |
 | disableMedia        | Optional, default false. Block images, CSS and fonts to speed up navigation.                                                                                     |
-| tabs_till_verify    | Optional (Chrome engine only). Number of `Tab` presses to reach a Turnstile checkbox; the resulting token is returned in `solution.turnstile_token`. The stealth engine detects Turnstile automatically and does not need this. |
+| tabs_till_verify    | Optional (Chrome engine only). Number of `Tab` presses to reach a Turnstile checkbox; the resulting token is returned in `solution.turnstile_token`. Waits up to 5 seconds for a widget that renders after the page loads, so a page with no widget at all costs that long before the request continues without a token. Pressing stops in time to still return a page if the checkbox never yields one. The stealth engine detects Turnstile automatically and does not need this. |
 
 > **Reusing cookies?** Use the User-Agent Solverr returns (`solution.userAgent`) in your own requests. If the UA and `cf_clearance` don't match, Cloudflare re-challenges you.
 
