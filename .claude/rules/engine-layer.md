@@ -87,7 +87,7 @@ work gets mis-planned.
 |---|---|---|---|
 | Request boundary | Full takeover | Parsing, typing and validation of every `/v1` parameter | **Done**, `validate_request_types` |
 | Result assembly | Full takeover | `assembly.py`: the read order and every field rule | **Done** |
-| Solve orchestration | Takeover of orchestration | Order of operations, budget, detection, fallback | Not started |
+| Solve orchestration | Takeover of orchestration | Order of operations, budget, detection, fallback | **Detection done** (`pipeline.py`). Navigation order, budget and fallback not started |
 | Challenge clearing | Engine only, by mechanism | Nothing. Declined, see Ownership | Standing decline |
 | Sessions | Takeover | One registry keyed by `SessionRef` | Not started |
 | Config | Takeover | One environment layer | Not started |

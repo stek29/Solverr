@@ -13,6 +13,9 @@ import asyncio
 from dataclasses import dataclass, field
 from unittest.mock import patch
 
+from selenium.common import NoSuchElementException, StaleElementReferenceException
+from selenium.webdriver.common.by import By
+
 from dtos import V1RequestBase
 from engines.chrome_engine import ChromeEngine
 from engines.stealth_engine import StealthEngine
@@ -26,7 +29,13 @@ AFTER_WAIT = LOADED + [("late", "1", None)]
 
 @dataclass
 class World:
-    """What the browser would find, described once for both engines."""
+    """What the browser would find, described once for both engines.
+
+    `selectors` are the CSS selectors present on the page, and `challenged_for`
+    is how many title reads they survive: 1 means the page looks challenged on
+    the first look and clean on the next, which is a challenge that clears. 0
+    means they are never there, whatever `selectors` says.
+    """
     title: str = "Example"
     html: str = "<html><body>ok</body></html>"
     url: str = "https://example-site.tld/"
@@ -34,19 +43,52 @@ class World:
     screenshot: bytes = b"\x89PNG-bytes"
     cookies_at_load: list = field(default_factory=lambda: list(LOADED))
     cookies_after_wait: list = field(default_factory=lambda: list(AFTER_WAIT))
+    selectors: frozenset = frozenset()
+    challenged_for: int = 0
+    # Title reads so far, shared by both fakes so "challenged_for" means the
+    # same number of looks on either engine.
+    looks: list = field(default_factory=list)
+
+    def read_title(self) -> str:
+        self.looks.append(1)
+        return self.title if len(self.looks) <= max(1, self.challenged_for) else "Example"
+
+    def has(self, selector: str) -> bool:
+        return selector in self.selectors and len(self.looks) <= self.challenged_for
 
 
 # ---- Chrome ----------------------------------------------------------------
 
+class _SwitchTo:
+    def default_content(self):
+        pass
+
+
+class _HtmlElement:
+    """The <html> element the Chrome engine holds to wait for staleness.
+
+    is_enabled raises stale, which is what a real one does once the cleared
+    challenge navigates to the page it was hiding. Returning True instead would
+    make every challenged test wait out the redirect timeout for nothing.
+    """
+
+    def is_enabled(self):
+        raise StaleElementReferenceException("the challenge navigated away")
+
+
 class _SeleniumDriver:
-    """The slice of the Selenium API an unchallenged solve touches."""
+    """The slice of the Selenium API a solve touches, challenged or not."""
 
     def __init__(self, world: World):
         self._world = world
         self.waited = False
-        self.title = world.title
+        self.switch_to = _SwitchTo()
         self.current_url = world.url
         self.page_source = world.html
+
+    @property
+    def title(self):
+        return self._world.read_title()
 
     def get(self, _url):
         pass
@@ -63,11 +105,17 @@ class _SeleniumDriver:
     def execute_cdp_cmd(self, _cmd, _params):
         pass
 
-    def find_element(self, *_args):
-        return object()
+    def find_element(self, by, value):
+        # Selenium's presence_of_element_located calls this, not find_elements,
+        # and signals absence by raising rather than returning nothing.
+        if by == By.TAG_NAME and value == "html":
+            return _HtmlElement()
+        if by == By.CSS_SELECTOR and self._world.has(value):
+            return object()
+        raise NoSuchElementException(value)
 
-    def find_elements(self, *_args):
-        return []
+    def find_elements(self, _by, selector):
+        return [object()] if self._world.has(selector) else []
 
     def get_screenshot_as_png(self):
         # Raw bytes, like Selenium's own: the base64 encoding is the kernel's job
@@ -132,13 +180,13 @@ class _PlaywrightPage:
         self.main_frame = object()
 
     async def title(self):
-        return self.world.title
+        return self.world.read_title()
 
     async def content(self):
         return self.world.html
 
-    async def query_selector(self, _sel):
-        return None
+    async def query_selector(self, selector):
+        return object() if self.world.has(selector) else None
 
     async def goto(self, *_a, **_k):
         pass

@@ -22,11 +22,10 @@ from playwright_captcha import CaptchaType, ClickSolver, FrameworkType, TwoCaptc
 import assembly
 import config
 import geo
+import pipeline
 import utils
 from async_runtime import get_runtime
-from detection import (ACCESS_DENIED_TITLES, ACCESS_DENIED_SELECTORS,
-                       CHALLENGE_TITLES, CHALLENGE_SELECTORS,
-                       INTERSTITIAL_SELECTORS, TURNSTILE_SELECTORS)
+from detection import INTERSTITIAL_SELECTORS, TURNSTILE_SELECTORS
 from dtos import V1RequestBase
 from engines.base import Engine, SolveResult
 from postform import build_post_html
@@ -112,6 +111,11 @@ def _to_playwright_cookies(cookies: list) -> list:
             translated["expires"] = float(cookie["expiry"])
         converted.append(translated)
     return converted
+
+
+async def _present(page, selector) -> bool:
+    """Whether a selector matches, as the shared verdict rule expects it."""
+    return await page.query_selector(selector) is not None
 
 
 async def _value(value):
@@ -827,34 +831,15 @@ class StealthEngine(Engine):
     async def _detect(self, page) -> Tuple[str, bool]:
         """Return (kind, is_turnstile) where kind is 'denied' | 'challenge' | 'none'.
 
-        Uses the same title/selector lists as the Chrome engine so detection
-        coverage (Cloudflare interstitial, Turnstile, DDoS-Guard, custom) is identical.
+        The verdict rule is shared with the Chrome engine (pipeline.py); only the
+        two looks below are this engine's. turnstile_is_a_challenge is True here
+        because a bare widget is reachable: the checkbox is clicked by coordinate
+        and needs no tab count from the caller.
         """
-        title = await page.title()
-
-        for t in ACCESS_DENIED_TITLES:
-            if title.startswith(t):
-                return "denied", False
-        for sel in ACCESS_DENIED_SELECTORS:
-            if await page.query_selector(sel):
-                return "denied", False
-
-        is_turnstile = False
-        for sel in TURNSTILE_SELECTORS:
-            if await page.query_selector(sel):
-                is_turnstile = True
-                break
-
-        challenge = is_turnstile
-        if not challenge:
-            for t in CHALLENGE_TITLES:
-                if t.lower() == title.lower():
-                    challenge = True
-                    break
-        if not challenge:
-            for sel in CHALLENGE_SELECTORS:
-                if await page.query_selector(sel):
-                    challenge = True
-                    break
-
-        return ("challenge" if challenge else "none"), is_turnstile
+        found, is_turnstile, _reason = await pipeline.run_async({
+            pipeline.Look.TITLE: lambda _arg: page.title(),
+            pipeline.Look.SELECTOR: lambda selector: _present(page, selector),
+        }, turnstile_is_a_challenge=True)
+        if found is pipeline.Verdict.DENIED:
+            return "denied", False
+        return ("challenge" if found is pipeline.Verdict.CHALLENGE else "none"), is_turnstile

@@ -24,9 +24,9 @@ from selenium.webdriver.support.wait import WebDriverWait
 import assembly
 import config
 import geo
+import pipeline
 import utils
-from detection import (ACCESS_DENIED_TITLES, ACCESS_DENIED_SELECTORS,
-                       CHALLENGE_TITLES, CHALLENGE_SELECTORS, TURNSTILE_SELECTORS)
+from detection import CHALLENGE_TITLES, CHALLENGE_SELECTORS, TURNSTILE_SELECTORS
 from dtos import V1RequestBase
 from engines.base import Engine, SolveResult
 from postform import build_post_html
@@ -160,35 +160,23 @@ class ChromeEngine(Engine):
         if utils.get_config_log_html():
             logging.debug(f"Response HTML:\n{driver.page_source}")
         html_element = driver.find_element(By.TAG_NAME, "html")
-        page_title = driver.title
 
-        # find access denied titles
-        for title in ACCESS_DENIED_TITLES:
-            if page_title.startswith(title):
-                raise Exception('Cloudflare has blocked this request. '
-                                'Probably your IP is banned for this site, check in your web browser.')
-        # find access denied selectors
-        for selector in ACCESS_DENIED_SELECTORS:
-            found_elements = driver.find_elements(By.CSS_SELECTOR, selector)
-            if len(found_elements) > 0:
-                raise Exception('Cloudflare has blocked this request. '
-                                'Probably your IP is banned for this site, check in your web browser.')
+        # The verdict rule is shared with the stealth engine (pipeline.py); only
+        # the two looks below are Chrome's. turnstile_is_a_challenge is False
+        # here: without a tabs_till_verify count there is no way to reach the
+        # checkbox, so treating a bare widget as a challenge would spend the
+        # whole budget in a wait loop that cannot win.
+        found, _is_turnstile, reason = pipeline.run({
+            pipeline.Look.TITLE: lambda _arg: driver.title,
+            pipeline.Look.SELECTOR: lambda selector: bool(
+                driver.find_elements(By.CSS_SELECTOR, selector)),
+        }, turnstile_is_a_challenge=False)
 
-        # find challenge by title
-        challenge_found = False
-        for title in CHALLENGE_TITLES:
-            if title.lower() == page_title.lower():
-                challenge_found = True
-                logging.info("Challenge detected. Title found: " + page_title)
-                break
-        if not challenge_found:
-            # find challenge by selectors
-            for selector in CHALLENGE_SELECTORS:
-                found_elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                if len(found_elements) > 0:
-                    challenge_found = True
-                    logging.info("Challenge detected. Selector found: " + selector)
-                    break
+        if found is pipeline.Verdict.DENIED:
+            raise Exception(pipeline.BLOCKED_MESSAGE)
+        challenge_found = found is pipeline.Verdict.CHALLENGE
+        if challenge_found:
+            logging.info("Challenge detected. Found: " + str(reason))
 
         # Read once per request rather than per wait: the whole solve runs under
         # func_timeout(maxTimeout), so a larger value only slows the retry

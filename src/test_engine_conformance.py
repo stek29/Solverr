@@ -14,6 +14,8 @@ Run: PYTHONPATH=src uv run --no-project python -m unittest test_engine_conforman
 import base64
 import unittest
 
+from detection import (ACCESS_DENIED_SELECTORS, ACCESS_DENIED_TITLES,
+                       CHALLENGE_SELECTORS, CHALLENGE_TITLES, TURNSTILE_SELECTORS)
 from engine_fakes import HARNESSES, World
 
 
@@ -123,6 +125,63 @@ class EngineConformanceTest(unittest.TestCase):
         for name, result, _ in self.each():
             seen[name] = sorted({k for c in result.cookies for k in c})
         self.assertEqual(len(set(map(tuple, seen.values()))), 1, seen)
+
+
+class DetectionConformanceTest(unittest.TestCase):
+    """Both engines reach the same verdict about a page from the same lists.
+
+    The verdict rule is written once in `pipeline.py`; these pin that both
+    engines still act on it, which the kernel alone cannot show.
+    """
+
+    def verdicts(self, **world):
+        for harness in HARNESSES:
+            try:
+                yield harness.name, harness.solve(World(**world)).message
+            except Exception as e:
+                yield harness.name, "RAISED: " + str(e)
+
+    def test_a_clean_page_is_not_a_challenge(self):
+        for name, message in self.verdicts():
+            with self.subTest(engine=name):
+                self.assertEqual(message, "Challenge not detected!")
+
+    def test_a_denied_title_is_refused(self):
+        for name, message in self.verdicts(title=ACCESS_DENIED_TITLES[0], challenged_for=9):
+            with self.subTest(engine=name):
+                self.assertIn("Cloudflare has blocked this request", message)
+
+    def test_a_denied_selector_is_refused(self):
+        for name, message in self.verdicts(
+                selectors=frozenset({ACCESS_DENIED_SELECTORS[0]}), challenged_for=9):
+            with self.subTest(engine=name):
+                self.assertIn("Cloudflare has blocked this request", message)
+
+    def test_a_challenge_title_is_solved(self):
+        for name, message in self.verdicts(title=CHALLENGE_TITLES[0], challenged_for=1):
+            with self.subTest(engine=name):
+                self.assertEqual(message, "Challenge solved!")
+
+    def test_a_challenge_selector_is_solved(self):
+        for name, message in self.verdicts(
+                selectors=frozenset({CHALLENGE_SELECTORS[0]}), challenged_for=1):
+            with self.subTest(engine=name):
+                self.assertEqual(message, "Challenge solved!")
+
+    def test_only_the_stealth_engine_treats_a_bare_widget_as_a_challenge(self):
+        """The one declared difference, asserted rather than left to be discovered.
+
+        A standalone Turnstile widget is a challenge to the stealth engine,
+        which can click it by coordinate, and not to the Chrome engine, which
+        can only reach a checkbox through a tab count the caller has to supply
+        as `tabs_till_verify`. Detecting it without that count would send Chrome
+        into a wait loop it cannot win, which costs the whole budget. This is a
+        capability boundary, so it is asserted here; if it ever stops being one,
+        this test is what says so.
+        """
+        got = dict(self.verdicts(selectors=frozenset(TURNSTILE_SELECTORS), challenged_for=1))
+        self.assertEqual(got["stealth"], "Challenge solved!")
+        self.assertEqual(got["chrome"], "Challenge not detected!")
 
 
 if __name__ == '__main__':

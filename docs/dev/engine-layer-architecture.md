@@ -134,7 +134,22 @@ live-checked.
    tail onto the request thread would have meant holding a context lock across a thread hop.
    Proved by mutation: reordering the reads in that one file now turns the conformance suite red
    for **both** engines, where the same defect previously took two separate edits to produce.
-4. **Solve orchestration.** The spine owns the order; engines expose primitives.
+4. **Solve orchestration.** Detection done 2026-08-25, as `pipeline.py`; the rest is not. Both
+   engines scanned the same four lists in the same order and reached the same verdict, in code
+   written twice, so the lists were shared and the rule that reads them was not. The rule is now a
+   generator like `assembly.py`, for the same sync/async reason. The one difference between the
+   engines became a parameter rather than a fork: `turnstile_is_a_challenge` is false for Chrome,
+   which cannot reach a checkbox without a `tabs_till_verify` count from the caller, so treating a
+   bare widget as a challenge would spend the whole budget in a wait loop it cannot win. That is a
+   capability boundary and it is now asserted rather than implicit.
+
+   Characterisation came first, as step 2's discipline requires: nothing covered the engines' own
+   detection scan, so the conformance suite gained six cases over both engines before any code
+   moved. That is what surfaced the turnstile asymmetry as a fact rather than a surprise.
+
+   Chrome's cost is unchanged at 15 selector round trips on a clean page, because the kernel only
+   looks for a widget when the engine could act on one. **Still to do in this step:** the
+   navigate-then-set-cookies-then-renavigate order, the shared budget, and the fallback.
 5. **Sessions.** One registry, `SessionRef`, and the check-then-act race in `sessions.get` fixed
    structurally rather than patched.
 6. **Config, then `RESPONSE_HEADERS`** as the first feature written once under the new rule, which
