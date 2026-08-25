@@ -5,15 +5,16 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 from uuid import uuid1
 
-from selenium.webdriver.chrome.webdriver import WebDriver
-
-import utils
+from typing import Any, Callable
 
 
 @dataclass
 class Session:
     session_id: str
-    driver: WebDriver
+    # What the engine keeps alive for this session: a Selenium WebDriver on the
+    # Chrome side, a Camoufox context on the stealth side. The store never looks
+    # inside it; only the engine's own teardown does.
+    payload: Any
     created_at: datetime
     last_used: datetime = field(default=None)  # type: ignore[assignment]
     # Requests currently solving on this driver. Guarded by SessionsStorage's
@@ -31,17 +32,25 @@ class Session:
         return datetime.now() - self.last_used
 
 
-class SessionsStorage:
-    """Creates, stores and reaps Chrome (Selenium) sessions.
+class SessionStore:
+    """Creates, stores and reaps sessions for one engine.
+
+    Every lifecycle rule lives here and is shared: idempotent creation, the
+    in-use mark that keeps the reaper off a live browser, TTL expiry, idle
+    reaping and the per-engine cap. The engine supplies only ``build`` (make the
+    thing a session holds, given a proxy) and ``teardown`` (close it). Both
+    engines had this written out separately, with the same expiry race in each.
 
     Thread-safe: the session dict is guarded by a lock because request threads
-    (create/get/destroy) and the background reaper touch it concurrently. Browser
-    teardown (driver.quit) always runs OUTSIDE the lock so a slow quit never
-    blocks other session operations.
+    (create/get/destroy) and the background reaper touch it concurrently.
+    Teardown always runs OUTSIDE the lock so a slow close never blocks other
+    session operations.
     """
 
-    def __init__(self):
+    def __init__(self, build: Callable, teardown: Callable):
         self.sessions = {}
+        self._build = build
+        self._teardown_payload = teardown
         self._lock = threading.Lock()
 
     def create(self, session_id: Optional[str] = None, proxy: Optional[dict] = None,
@@ -66,9 +75,8 @@ class SessionsStorage:
         if existing is not None:
             return existing, False
 
-        # Build the browser outside the lock (it can take several seconds).
-        driver = utils.get_webdriver(proxy)
-        session = Session(session_id, driver, datetime.now())
+        # Build outside the lock (launching a browser takes seconds).
+        session = Session(session_id, self._build(proxy), datetime.now())
 
         with self._lock:
             race = self.sessions.get(session_id)
@@ -115,19 +123,31 @@ class SessionsStorage:
         """
         session, fresh = self.create(session_id, proxy)
 
-        if ttl is not None and not fresh and session.lifetime() > ttl:
-            with self._lock:
-                busy = session.in_use > 0
-            if busy:
-                # Recreating quits the driver, and another request is driving it
-                # right now. Let this request reuse the old browser; the next one
-                # to find it idle does the recreation.
-                logging.debug(f'session\'s lifetime has expired but a request is still on it, '
-                              f'so it is reused (session_id={session_id})')
-            else:
-                logging.debug(f'session\'s lifetime has expired, so the session is recreated (session_id={session_id})')
-                session, fresh = self.create(session_id, proxy, force_new=True)
+        # Take the mark and judge the lifetime under one acquisition. Reading
+        # "is anyone on it" and then acting on the answer let another request
+        # take the session in between and have its browser quit underneath it,
+        # which is the failure the mark exists to prevent. in_use == 1 is what
+        # makes this request the only holder, so replacing is safe.
+        with self._lock:
+            session.last_used = datetime.now()
+            session.in_use += 1
+            expired = (ttl is not None and not fresh
+                       and session.lifetime() > ttl and session.in_use == 1)
+            if expired:
+                # Out of the pool while the lock is still held, so nothing can
+                # find it between the decision and the browser closing.
+                self.sessions.pop(session_id, None)
 
+        if not expired:
+            if ttl is not None and not fresh and session.lifetime() > ttl:
+                logging.debug("session's lifetime has expired but a request is still on it, "
+                              "so it is reused (session_id=%s)", session_id)
+            return session, fresh
+
+        logging.debug("session's lifetime has expired, so the session is recreated (session_id=%s)",
+                      session_id)
+        self._teardown(session)
+        session, fresh = self.create(session_id, proxy)
         with self._lock:
             session.last_used = datetime.now()
             session.in_use += 1
@@ -184,8 +204,6 @@ class SessionsStorage:
 
     def _teardown(self, session: Session) -> None:
         try:
-            if utils.PLATFORM_VERSION == "nt":
-                session.driver.close()
-            session.driver.quit()
+            self._teardown_payload(session.payload)
         except Exception:
-            logging.debug("Chrome session teardown failed", exc_info=True)
+            logging.debug("session teardown failed", exc_info=True)

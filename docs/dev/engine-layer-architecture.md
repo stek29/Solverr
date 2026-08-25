@@ -162,8 +162,27 @@ live-checked.
    the `<html>` element for its staleness wait, the stealth engine dumping HTML and settling on
    networkidle before re-detecting. Those are engine mechanisms rather than a shared order, so
    forcing them into one kernel would have meant a kernel shaped around both engines' internals.
-5. **Sessions.** One registry, `SessionRef`, and the check-then-act race in `sessions.get` fixed
-   structurally rather than patched.
+5. **Sessions.** Done 2026-08-25, with one part of the plan dropped on measurement. The two
+   registries were structural twins, nine methods each with the same rules and different payloads,
+   and both carried the same expiry race: the busy check and the replacement were separate lock
+   acquisitions, so a request arriving in between took a session whose browser was then closed. The
+   stealth side was worse, reading `ctx.lock.locked()` with no registry lock held at all. Both now
+   use one `SessionStore`, which takes the decision and the removal under a single acquisition and
+   only replaces a session this request is the sole holder of. The stealth engine's busy signal
+   moved from its asyncio lock to the same in-use mark the Chrome engine takes, which is what makes
+   the reaper and the cap agree across engines; its lock stays, for serialising requests on one
+   context.
+
+   **`SessionRef` was dropped.** It was proposed by analogy to the reference project's `EntryId`,
+   and the analogy does not hold. `EntryId` flows through a UI that project owns end to end, while a
+   Solverr session id arrives as a bare string in the `/v1` contract, which this fork cannot change.
+   Resolving which engine holds an id is the controller's actual job, not a mistake a type would
+   prevent, and the case that motivated it, the same id living in both pools after a fallback, is
+   legitimate and no identity type fixes it.
+
+   The race test is worth knowing about: rather than threads and timing, `_WindowLock` runs a second
+   request at each lock release in turn, which is deterministic and fails at window 2 on the old
+   code, the release right after the busy check.
 6. **Config, then `RESPONSE_HEADERS`** as the first feature written once under the new rule, which
    is what proves the seam works.
 

@@ -43,9 +43,11 @@ nothing.
 - **Never reimplement a clearing core in the spine.** A step that starts reimplementing what
   `WebDriverWait` over the challenge selectors does, or what the coordinate click through the closed
   shadow root does, has gone too far.
-- **Identity is `SessionRef`**, never a bare session-id string. The two pools can hold the same id,
-  which `_cmd_sessions_list` already works around at runtime; a bare string cannot say which engine
-  owns a session, so a wrong-pool lookup stays constructible until the type says otherwise.
+- **Session ids stay bare strings.** A `SessionRef(engine, id)` was planned and then dropped once
+  measured: the `/v1` contract has clients send a bare id, and resolving which engine holds one is
+  the controller's job rather than a mistake a type could prevent. The same id legitimately exists
+  in both pools after a fallback, which no identity type fixes. See the record for the full reason;
+  do not re-propose it without new evidence.
 
 ## The rules that bind every change
 
@@ -89,7 +91,7 @@ work gets mis-planned.
 | Result assembly | Full takeover | `assembly.py`: the read order and every field rule | **Done** |
 | Solve orchestration | Takeover of orchestration | The page verdict and the navigation order (`pipeline.py`), the solve deadline (`budget.py`). The even split and the fallback were already single-sourced in `_resolve_challenge` | **Done** |
 | Challenge clearing | Engine only, by mechanism | Nothing. Declined, see Ownership | Standing decline |
-| Sessions | Takeover | One registry keyed by `SessionRef` | Not started |
+| Sessions | Takeover | One `SessionStore` per engine, one implementation (`sessions.py`). No `SessionRef`: see the record | **Done** |
 | Config | Takeover | One environment layer | Not started |
 | Passthrough | Not an engine surface | Single implementation already | n/a |
 

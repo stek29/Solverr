@@ -51,7 +51,7 @@ class ChromeEngine(Engine):
     name = "chrome"
 
     def __init__(self, sessions):
-        # Unified SessionsStorage; Chrome sessions hold a live WebDriver.
+        # Shared SessionStore; a Chrome session's payload is a live WebDriver.
         self._sessions = sessions
 
     def solve(self, req: V1RequestBase, method: str, timeout: float) -> SolveResult:
@@ -73,7 +73,7 @@ class ChromeEngine(Engine):
                     logging.debug(f"existing session is used to perform the request (session_id={session_id}, "
                                   f"lifetime={str(session.lifetime())}, ttl={str(ttl)})")
 
-                driver = session.driver
+                driver = session.payload
             else:
                 driver = utils.get_webdriver(req.proxy)
                 logging.debug('New instance of webdriver has been created to perform the request')

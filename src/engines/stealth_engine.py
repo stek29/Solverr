@@ -10,11 +10,9 @@ across requests.
 import asyncio
 import base64
 import logging
-import threading
 from concurrent.futures import TimeoutError as FuturesTimeout
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
-from uuid import uuid1
 
 from invisible_playwright.async_api import InvisiblePlaywright
 from playwright_captcha import CaptchaType, ClickSolver, FrameworkType, TwoCaptchaSolver
@@ -30,6 +28,7 @@ from detection import INTERSTITIAL_SELECTORS, TURNSTILE_SELECTORS
 from dtos import V1RequestBase
 from engines.base import Engine, SolveResult
 from postform import build_post_html
+from sessions import SessionStore
 
 # Best-effort settle waits are bounded; the hard navigation cap comes from the
 # request's maxTimeout via asyncio.wait_for in _do_solve.
@@ -209,140 +208,65 @@ class StealthEngine(Engine):
 
     def __init__(self):
         self._runtime = get_runtime()
-        self._sessions = {}  # session_id -> StealthContext
-        self._sessions_lock = threading.Lock()
+        self._sessions = SessionStore(build=self._start_context,
+                                      teardown=self._close_context)
 
     # ---- session registry (controller-facing) -------------------------------
+    #
+    # Every rule below lives in sessions.SessionStore, shared with the Chrome
+    # engine: idempotent creation, the in-use mark that keeps the reaper off a
+    # live browser, TTL expiry, idle reaping and the cap. This engine supplies
+    # only how to start and close what a session holds.
 
-    def session_ids(self) -> List[str]:
-        with self._sessions_lock:
-            return list(self._sessions.keys())
-
-    def exists(self, session_id: str) -> bool:
-        with self._sessions_lock:
-            return session_id in self._sessions
-
-    def create_session(self, session_id: Optional[str] = None, proxy: Optional[dict] = None,
-                       force_new: bool = False) -> Tuple[str, bool]:
-        session_id = session_id or str(uuid1())
-        if force_new:
-            self.destroy_session(session_id)
-
-        with self._sessions_lock:
-            if session_id in self._sessions:
-                return session_id, False
-
-        # Launch the browser outside the lock (it can take seconds).
+    def _start_context(self, proxy: Optional[dict]) -> "StealthContext":
         ctx = StealthContext(geo.proxy_to_config(proxy))
         try:
             self._runtime.run(ctx.start(), timeout=config.stealth_start_timeout())
         except Exception:
             # start() may already have launched the browser before failing.
-            self._teardown(ctx)
+            self._close_context(ctx)
             raise
+        return ctx
 
-        with self._sessions_lock:
-            race = self._sessions.get(session_id)
-            if race is None:
-                self._sessions[session_id] = ctx
-        if race is not None:
-            self._teardown(ctx)
-            return session_id, False
-        return session_id, True
+    def _close_context(self, ctx: "StealthContext") -> None:
+        self._runtime.run(ctx.close(), timeout=60)
+
+    def session_ids(self) -> List[str]:
+        return self._sessions.session_ids()
+
+    def exists(self, session_id: str) -> bool:
+        return self._sessions.exists(session_id)
+
+    def create_session(self, session_id: Optional[str] = None, proxy: Optional[dict] = None,
+                       force_new: bool = False) -> Tuple[str, bool]:
+        session, fresh = self._sessions.create(session_id, proxy, force_new)
+        return session.session_id, fresh
 
     def destroy_session(self, session_id: str) -> bool:
-        with self._sessions_lock:
-            ctx = self._sessions.pop(session_id, None)
-        if ctx is None:
-            return False
-        self._teardown(ctx)
-        return True
+        return self._sessions.destroy(session_id)
 
     def touch(self, session_id: str) -> None:
-        with self._sessions_lock:
-            ctx = self._sessions.get(session_id)
-        if ctx is not None:
-            ctx.last_used = datetime.now()
+        self._sessions.touch(session_id)
 
     def reap_idle(self, ttl: timedelta) -> List[str]:
-        if ttl is None or ttl.total_seconds() <= 0:
-            return []
-        now = datetime.now()
-        with self._sessions_lock:
-            # A context solving right now is not idle, whatever its timestamp says.
-            stale = [sid for sid, c in self._sessions.items()
-                     if (now - c.last_used) > ttl and not c.lock.locked()]
-            popped = [(sid, self._sessions.pop(sid)) for sid in stale]
-        for _, ctx in popped:
-            self._teardown(ctx)
-        return [sid for sid, _ in popped]
+        return self._sessions.reap_idle(ttl)
 
     def enforce_cap(self, max_sessions: int) -> List[str]:
-        if max_sessions is None or max_sessions <= 0:
-            return []
-        with self._sessions_lock:
-            if len(self._sessions) <= max_sessions:
-                return []
-            # Never evict a context mid-solve: the request would die with
-            # "Target page, context or browser has been closed". The cap is
-            # best-effort, so under full pressure we just evict fewer.
-            ordered = sorted((kv for kv in self._sessions.items() if not kv[1].lock.locked()),
-                             key=lambda kv: kv[1].last_used)
-            to_remove = ordered[: len(self._sessions) - max_sessions]
-            for sid, _ in to_remove:
-                self._sessions.pop(sid, None)
-        for _, ctx in to_remove:
-            self._teardown(ctx)
-        return [sid for sid, _ in to_remove]
-
-    def _teardown(self, ctx: "StealthContext") -> None:
-        try:
-            self._runtime.run(ctx.close(), timeout=60)
-        except Exception:
-            logging.debug("stealth session teardown failed", exc_info=True)
-
-    def _get_session(self, session_id: str, ttl: Optional[timedelta],
-                     proxy: Optional[dict] = None) -> Tuple[StealthContext, bool]:
-        """The session's context, created with ``proxy`` if it isn't there yet.
-
-        The proxy has to reach create_session below. Without it a session that
-        outlives its TTL comes back on a direct connection, and one named by a
-        request before it exists is born that way, which is silent: the browser
-        still solves, just from the server's own address.
-        """
-        fresh = False
-        with self._sessions_lock:
-            ctx = self._sessions.get(session_id)
-        if ctx is not None and ttl is not None and ctx.lifetime() > ttl:
-            if ctx.lock.locked():
-                # Recreating closes the browser, and a request is solving on it
-                # right now. Reuse it here; whoever finds it idle recreates it.
-                logging.debug(f"stealth session expired but a request is still on it, "
-                              f"so it is reused (session_id={session_id})")
-            else:
-                logging.debug(f"stealth session expired, recreating (session_id={session_id})")
-                self.destroy_session(session_id)
-                ctx = None
-        # (Re)create, tolerating a reaper/cap eviction racing between calls.
-        for _ in range(2):
-            if ctx is not None:
-                break
-            self.create_session(session_id, proxy=proxy)
-            fresh = True
-            with self._sessions_lock:
-                ctx = self._sessions.get(session_id)
-        if ctx is None:
-            raise Exception("Failed to create stealth session")
-        ctx.last_used = datetime.now()
-        return ctx, fresh
+        return self._sessions.enforce_cap(max_sessions)
 
     # ---- solving ------------------------------------------------------------
 
     def solve(self, req: V1RequestBase, method: str, timeout: float) -> SolveResult:
         own_ctx = False
+        # get() hands the session over already marked in use, so the reaper and
+        # the cap cannot close the browser under this request. Released in the
+        # finally below, exactly as the Chrome engine does it.
+        in_use = None
         if req.session:
             ttl = timedelta(minutes=req.session_ttl_minutes) if req.session_ttl_minutes else None
-            ctx, _ = self._get_session(req.session, ttl, req.proxy)
+            session, _ = self._sessions.get(req.session, ttl, req.proxy)
+            in_use = session
+            ctx = session.payload
         else:
             ctx = StealthContext(geo.proxy_to_config(req.proxy))
             # Owned before start(): a launch that fails or times out has usually
@@ -357,6 +281,8 @@ class StealthEngine(Engine):
         except Exception as e:
             raise Exception('Error solving the challenge. ' + str(e).replace('\n', '\\n'))
         finally:
+            if in_use is not None:
+                self._sessions.end_use(in_use)
             if own_ctx:
                 try:
                     self._runtime.run(ctx.close(), timeout=60)

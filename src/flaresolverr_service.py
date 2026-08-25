@@ -20,9 +20,17 @@ from dtos import (STATUS_ERROR, STATUS_OK, ChallengeResolutionResultT,
                   V1RequestBase, V1ResponseBase, validate_request_types)
 from engines.base import SolveResult
 from engines.chrome_engine import ChromeEngine
-from sessions import SessionsStorage
+from sessions import SessionStore
 
-SESSIONS_STORAGE = SessionsStorage()
+def _quit_driver(driver) -> None:
+    """Close a Selenium driver. The extra close() is a Windows-only quirk kept
+    from upstream: quit() alone leaves the window behind there."""
+    if utils.PLATFORM_VERSION == "nt":
+        driver.close()
+    driver.quit()
+
+
+SESSIONS_STORAGE = SessionStore(build=utils.get_webdriver, teardown=_quit_driver)
 
 # Chrome (Selenium + undetected_chromedriver) is the default engine and owns its
 # own SessionsStorage. The stealth engine (Camoufox + playwright-captcha) is

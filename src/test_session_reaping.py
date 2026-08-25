@@ -7,18 +7,19 @@ holds a real WebDriver.
 
 Run: PYTHONPATH=src uv run --no-project python -m unittest test_session_reaping
 """
+import threading
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-from sessions import Session, SessionsStorage
+from sessions import Session, SessionStore
 
 LONG_AGO = datetime.now() - timedelta(hours=2)
 TTL = timedelta(minutes=30)
 
 
 def storage_with(*sessions: Session) -> SessionsStorage:
-    storage = SessionsStorage()
+    storage = SessionStore(build=lambda proxy=None: MagicMock(), teardown=lambda d: d.quit())
     for session in sessions:
         storage.sessions[session.session_id] = session
     return storage
@@ -97,7 +98,7 @@ class HandingOutASession(unittest.TestCase):
         with patch("utils.get_webdriver", lambda proxy=None: MagicMock()):
             storage.get("s", ttl=TTL)
 
-        self.assertTrue(target.driver.quit.called)
+        self.assertTrue(target.payload.quit.called)
 
     def test_an_expired_session_is_reused_while_a_request_is_on_it(self):
         target = session("s", LONG_AGO, in_use=1)
@@ -106,8 +107,131 @@ class HandingOutASession(unittest.TestCase):
         with patch("utils.get_webdriver", lambda proxy=None: MagicMock()):
             storage.get("s", ttl=TTL)
 
-        self.assertFalse(target.driver.quit.called)
+        self.assertFalse(target.payload.quit.called)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExpiryRace(unittest.TestCase):
+    """An expired session is never replaced out from under a concurrent request.
+
+    The check and the replacement used to be two separate lock acquisitions, so
+    a second request could take the session in the gap and have its browser quit
+    mid-solve, failing with an "invalid session id" it could do nothing about.
+    """
+
+    def storage(self):
+        store = SessionStore(build=lambda proxy=None: MagicMock(), teardown=lambda d: d.quit())
+        store.create("shared")
+        return store
+
+    def test_a_session_a_second_request_holds_is_not_replaced(self):
+        store = self.storage()
+        store.sessions["shared"].created_at = datetime.now() - timedelta(hours=2)
+        original = store.sessions["shared"]
+
+        # A second request is already on it when the expiry check runs.
+        holder, _ = store.get("shared")
+        second, _ = store.get("shared", ttl=timedelta(minutes=1))
+
+        self.assertIs(second, original, "the browser was replaced under a live request")
+        store.end_use(holder)
+
+    def test_the_browser_a_second_request_holds_is_never_quit(self):
+        store = self.storage()
+        store.sessions["shared"].created_at = datetime.now() - timedelta(hours=2)
+        driver = store.sessions["shared"].payload
+
+        holder, _ = store.get("shared")
+        store.get("shared", ttl=timedelta(minutes=1))
+
+        driver.quit.assert_not_called()
+        store.end_use(holder)
+
+    def test_an_expired_session_nobody_holds_is_still_replaced(self):
+        store = self.storage()
+        store.sessions["shared"].created_at = datetime.now() - timedelta(hours=2)
+        original = store.sessions["shared"]
+
+        replacement, _ = store.get("shared", ttl=timedelta(minutes=1))
+
+        self.assertIsNot(replacement, original)
+
+    def test_the_replaced_browser_is_quit(self):
+        store = self.storage()
+        store.sessions["shared"].created_at = datetime.now() - timedelta(hours=2)
+        driver = store.sessions["shared"].payload
+
+        store.get("shared", ttl=timedelta(minutes=1))
+
+        driver.quit.assert_called()
+
+
+class _WindowLock:
+    """A lock that runs `visitor` after one chosen release.
+
+    Every release is a window where another request can act on the pool. Putting
+    a request into each one in turn is how a race gets tested without threads
+    and without relying on timing.
+    """
+
+    def __init__(self, at_release, visitor):
+        self._lock = threading.Lock()
+        self._at = at_release
+        self._visitor = visitor
+        self._releases = 0
+        self._inside = False
+
+    def __enter__(self):
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, *_exc):
+        self._lock.release()
+        if self._inside:
+            return False
+        self._releases += 1
+        if self._releases == self._at:
+            self._inside = True
+            try:
+                self._visitor()
+            finally:
+                self._inside = False
+        return False
+
+    @property
+    def releases(self):
+        return self._releases
+
+
+class ExpiryRaceUnderConcurrency(unittest.TestCase):
+    """No window in the expiry path hands out a session that is about to close.
+
+    The check and the replacement used to be two separate lock acquisitions, so
+    a request arriving in between took a session whose browser was then quit,
+    failing mid-solve with an "invalid session id" it could do nothing about.
+    """
+
+    def run_with_visitor_at(self, release_index):
+        """Replace an expired session while a second request arrives at one window."""
+        store = SessionStore(build=lambda proxy=None: MagicMock(), teardown=lambda d: d.quit())
+        store.create("shared")
+        store.sessions["shared"].created_at = datetime.now() - timedelta(hours=2)
+
+        taken = []
+
+        def visitor():
+            session, _ = store.get("shared")
+            taken.append(session)
+
+        store._lock = _WindowLock(release_index, visitor)
+        store.get("shared", ttl=timedelta(minutes=1))
+        return taken
+
+    def test_no_window_hands_out_a_browser_that_is_then_quit(self):
+        for release_index in range(1, 8):
+            with self.subTest(window=release_index):
+                for session in self.run_with_visitor_at(release_index):
+                    session.payload.quit.assert_not_called()
