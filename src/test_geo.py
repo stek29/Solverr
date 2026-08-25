@@ -43,8 +43,34 @@ class ProxyShapeTest(unittest.TestCase):
     def test_no_proxy_is_none(self):
         self.assertIsNone(geo.proxy_to_config(None))
 
-    def test_proxy_without_a_url_is_none(self):
-        self.assertIsNone(geo.proxy_to_config({"username": "u"}))
+    def test_empty_proxy_is_none(self):
+        self.assertIsNone(geo.proxy_to_config({}))
+
+    # A shape that cannot be a proxy is refused rather than read as "no proxy".
+    # These used to return None, so the browser launched with no proxy at all
+    # and the request went out on the server's own address while reporting
+    # success. `'url' not in proxy` is a substring test against a string.
+
+    def test_proxy_without_a_url_is_refused(self):
+        with self.assertRaises(Exception):
+            geo.proxy_to_config({"username": "u"})
+
+    def test_proxy_sent_as_a_string_is_refused(self):
+        with self.assertRaises(Exception):
+            geo.proxy_to_config("socks5://1.2.3.4:9050")
+
+    def test_proxy_string_containing_url_is_refused(self):
+        with self.assertRaises(Exception):
+            geo.proxy_to_config("http://url.example.com")
+
+    def test_blank_url_is_refused(self):
+        with self.assertRaises(Exception):
+            geo.proxy_to_config({"url": "   "})
+
+    def test_the_refusal_names_the_parameter(self):
+        with self.assertRaises(Exception) as caught:
+            geo.proxy_to_config("socks5://1.2.3.4:9050")
+        self.assertIn("proxy", str(caught.exception))
 
 
 class PinnedTimezoneTest(unittest.TestCase):

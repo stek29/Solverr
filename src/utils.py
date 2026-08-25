@@ -218,16 +218,23 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
         logging.error("Error starting Chrome: %s" % e)
         # No point in continuing if we cannot retrieve the driver
         raise e
+    finally:
+        # In a finally because the directory holds the proxy username and
+        # password in plaintext: a launch that raised used to skip the cleanup
+        # below and leave them in the system temp directory for good. Chrome has
+        # already read the extension by the time the constructor returns.
+        if proxy_extension_dir is not None:
+            try:
+                shutil.rmtree(proxy_extension_dir)
+            except Exception:
+                logging.debug("proxy extension cleanup failed", exc_info=True)
+            proxy_extension_dir = None
 
     # save the patched driver to avoid re-downloads
     if driver_exe_path is None:
         PATCHED_DRIVER_PATH = os.path.join(driver.patcher.data_path, driver.patcher.exe_name)
         if PATCHED_DRIVER_PATH != driver.patcher.executable_path:
             shutil.copy(driver.patcher.executable_path, PATCHED_DRIVER_PATH)
-
-    # clean up proxy extension directory
-    if proxy_extension_dir is not None:
-        shutil.rmtree(proxy_extension_dir)
 
     # selenium vanilla
     # options = webdriver.ChromeOptions()

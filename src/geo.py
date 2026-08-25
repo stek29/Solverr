@@ -55,9 +55,26 @@ _known_zones_cache = None
 
 def proxy_to_config(proxy: Optional[dict]) -> Optional[dict]:
     """A FlareSolverr proxy dict ({url, username, password}) as the Playwright,
-    Camoufox and invisible_core shape ({server, username, password})."""
-    if not proxy or 'url' not in proxy:
+    Camoufox and invisible_core shape ({server, username, password}).
+
+    Raises on a value that cannot be a proxy rather than reporting "no proxy".
+    `'url' not in proxy` does substring matching when handed a string, so a
+    proxy sent as "socks5://host:port" read as having no url and the request
+    went out unproxied, on the server's own address, while still reporting
+    success. Failing closed is the only safe direction here: the caller asked
+    for a proxy, and reliability and egress identity both depend on getting one.
+
+    Every path that reaches a browser funnels through here, including
+    get_webdriver, which calls this before it reads the dict itself.
+    """
+    if proxy is None:
         return None
+    if not isinstance(proxy, dict):
+        raise Exception("Request parameter 'proxy' must be an object with a 'url' field.")
+    if not proxy:
+        return None
+    if not isinstance(proxy.get('url'), str) or not proxy['url'].strip():
+        raise Exception("Request parameter 'proxy' must have a 'url' field naming the proxy server.")
     cfg = {"server": proxy['url']}
     if proxy.get('username'):
         cfg['username'] = proxy['username']

@@ -15,6 +15,8 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 - **A `tabs_till_verify` request now finds a Turnstile widget that appears after the page has loaded, instead of answering "Challenge not detected!" with no token.** The widget was looked for once, the instant navigation finished, which is before the site has injected it; it now gets up to 5 seconds to show up. A read that races the page re-rendering no longer fails the whole request either.
 - **A Turnstile checkbox that never yields a token no longer holds the request for its entire `maxTimeout`.** Pressing now stops in time to return the page and let the other engine try, rather than retrying until the budget runs out.
 - **A request that sends both `cookies` and `tabs_till_verify` now returns a token for the page it actually hands back.** The token was read before the cookie reload, so it described a document that had already been replaced.
+- **A malformed `proxy` is now refused instead of quietly sending the request unproxied from the server's own address.** A proxy given as a plain string, or as an object with no `url`, used to read as "no proxy" and the solve went ahead and reported success, so nothing revealed that the traffic never went through it.
+- **Proxy credentials are no longer left behind on disk when a browser fails to start.** The temporary extension carrying the proxy username and password was only cleaned up after a successful launch.
 
 ### Other
 
