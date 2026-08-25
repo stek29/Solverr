@@ -89,8 +89,10 @@ class Engine(Protocol):
 
 Current homes and where they land.
 
-- Spine: new `core/` holding `pipeline.py` (order of operations), `assemble.py` (the pure result
-  function), `budget.py` (the shared deadline and even split), and `detection.py` moved as-is.
+- Spine: `src/assembly.py` today (the read order and the field rules), joined later by the
+  pipeline order and the shared budget. These land in a `core/` package once there is enough to
+  justify the move; the reshape is behaviour-free and deliberately not bundled with a behaviour
+  change.
 - Boundary: new `api/` holding the typed request model that replaces `dtos.py`'s
   `__dict__.update`, and the response serialization.
 - Engines: `engines/chrome/` and `engines/stealth/`, each an adapter plus its upstream-derived core.
@@ -122,8 +124,16 @@ live-checked.
    Chrome-only cookie tests it supersedes were deleted rather than left beside it, so the rules it
    covers are pinned once. Verified by mutation on each engine separately: moving either engine's
    cookie read back before the wait turns the suite red and names that engine.
-3. **Result assembly.** `assemble` extracted; both engines call it. This is the step that makes the
-   cookie-ordering class unwritable.
+3. **Result assembly.** Done 2026-08-25, as `assembly.py`. Not the pure function this document
+   first proposed: one engine is synchronous on the request thread and the other asynchronous on
+   the shared event loop, and one function body cannot be both. The order is a generator that says
+   what to read and in what order, and each engine supplies only how to read it, a flat mapping
+   with no rules in it. Chosen over the alternatives because it needs no change to either
+   concurrency model: running the kernel under `asyncio.run` inside the Chrome worker thread would
+   have put an event loop in a path `func_timeout` kills asynchronously, and moving the stealth
+   tail onto the request thread would have meant holding a context lock across a thread hop.
+   Proved by mutation: reordering the reads in that one file now turns the conformance suite red
+   for **both** engines, where the same defect previously took two separate edits to produce.
 4. **Solve orchestration.** The spine owns the order; engines expose primitives.
 5. **Sessions.** One registry, `SessionRef`, and the check-then-act race in `sessions.get` fixed
    structurally rather than patched.

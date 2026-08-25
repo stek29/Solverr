@@ -19,6 +19,7 @@ from uuid import uuid1
 from invisible_playwright.async_api import InvisiblePlaywright
 from playwright_captcha import CaptchaType, ClickSolver, FrameworkType, TwoCaptchaSolver
 
+import assembly
 import config
 import geo
 import utils
@@ -111,6 +112,11 @@ def _to_playwright_cookies(cookies: list) -> list:
             translated["expires"] = float(cookie["expiry"])
         converted.append(translated)
     return converted
+
+
+async def _value(value):
+    """A plain value as something awaitable, so every assembly read looks alike."""
+    return value
 
 
 def _user_agent_from(main_response) -> str:
@@ -506,47 +512,41 @@ class StealthEngine(Engine):
                 logging.info("Challenge not detected!")
                 message = "Challenge not detected!"
 
-            result = SolveResult()
-            result.url = page.url
-            # FlareSolverr contract: solution.status is 200 on a fetched/solved page,
-            # and clients (e.g. the reader app) reject non-2xx. The Chrome engine also
-            # hardcodes 200; report 200 here so a Cloudflare 403 challenge page (or an
-            # upstream 403) doesn't get surfaced as a solve failure. A real block is
-            # already raised as an error by the "denied" detection above.
-            result.status = 200
-            if not ctx.user_agent:
-                # Backfill the context so a session that started without one
-                # recovers for its later requests too, not just this response.
-                ctx.user_agent = _user_agent_from(main_response)
-            result.user_agent = ctx.user_agent
-            result.message = message
-            # Parity with the Chrome engine: return the Turnstile token when a
-            # standalone widget is present.
-            if is_turnstile:
-                result.turnstile_token = await self._turnstile_token(page)
+            async def user_agent():
+                if not ctx.user_agent:
+                    # Backfill the context so a session that started without one
+                    # recovers for its later requests too, not just this response.
+                    ctx.user_agent = _user_agent_from(main_response)
+                return ctx.user_agent
 
-            if not req.returnOnlyCookies:
-                result.headers = {}
-                if req.waitInSeconds and req.waitInSeconds > 0:
-                    logging.info("Waiting %s seconds before returning the response...", req.waitInSeconds)
-                    await asyncio.sleep(req.waitInSeconds)
+            async def token():
+                # Parity with the Chrome engine: return the Turnstile token when
+                # a standalone widget is present.
+                return await self._turnstile_token(page) if is_turnstile else None
+
+            async def body():
+                # Firefox opens a PDF in its viewer, so page.content() would hand
+                # back the viewer rather than the file. This is the one read where
+                # the two engines genuinely differ in what they can produce.
                 pdf = await self._pdf_body(page, main_response)
                 if pdf is not None:
-                    result.response = pdf
-                    result.content_type = "application/pdf"
-                else:
-                    result.response = await page.content()
+                    return pdf, "application/pdf"
+                return await page.content(), None
 
-            if req.returnScreenshot:
-                result.screenshot = base64.b64encode(await page.screenshot()).decode("ascii")
+            async def cookies():
+                return _to_client_cookies(await ctx.context.cookies())
 
-            # Read last, after waitInSeconds, for the same reason as the Chrome
-            # engine: a page that sets cookies from its own JS does it during
-            # that wait, and reading before it handed back the body that has
-            # them with a cookie list that does not.
-            result.cookies = _to_client_cookies(await ctx.context.cookies())
-
-            return result
+            # Order and field rules live in assembly.py, shared with the Chrome
+            # engine. Only the reads below are this engine's.
+            return await assembly.run_async(req, message, {
+                assembly.Read.URL: lambda: _value(page.url),
+                assembly.Read.USER_AGENT: user_agent,
+                assembly.Read.TOKEN: token,
+                assembly.Read.WAIT: lambda: asyncio.sleep(req.waitInSeconds),
+                assembly.Read.BODY: body,
+                assembly.Read.SCREENSHOT: page.screenshot,
+                assembly.Read.COOKIES: cookies,
+            })
         finally:
             for target, block_handler, response_handler in instrumented:
                 target.remove_listener("response", response_handler)

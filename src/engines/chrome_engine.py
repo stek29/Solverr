@@ -21,6 +21,7 @@ from selenium.webdriver.support.expected_conditions import (
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.wait import WebDriverWait
 
+import assembly
 import config
 import geo
 import utils
@@ -234,31 +235,18 @@ class ChromeEngine(Engine):
             logging.info("Challenge not detected!")
             message = "Challenge not detected!"
 
-        result = SolveResult()
-        result.url = driver.current_url
-        result.status = 200  # todo: fix, selenium not provides this info
-        result.user_agent = utils.get_user_agent(driver)
-        result.turnstile_token = turnstile_token
-        result.message = message
-
-        if not req.returnOnlyCookies:
-            result.headers = {}  # todo: fix, selenium not provides this info
-
-            if req.waitInSeconds and req.waitInSeconds > 0:
-                logging.info("Waiting " + str(req.waitInSeconds) + " seconds before returning the response...")
-                time.sleep(req.waitInSeconds)
-
-            result.response = driver.page_source
-
-        if req.returnScreenshot:
-            result.screenshot = driver.get_screenshot_as_base64()
-
-        # Read last, after waitInSeconds: a page that sets cookies from its own
-        # JS does it during that wait, and reading before it handed back the
-        # body that has them with a cookie list that does not.
-        result.cookies = driver.get_cookies()
-
-        return result
+        # Order and field rules live in assembly.py, shared with the stealth
+        # engine. Only the reads below are Chrome's, and none of them is a rule.
+        # headers stays an empty map: Selenium does not report the response ones.
+        return assembly.run(req, message, {
+            assembly.Read.URL: lambda: driver.current_url,
+            assembly.Read.USER_AGENT: lambda: utils.get_user_agent(driver),
+            assembly.Read.TOKEN: lambda: turnstile_token,
+            assembly.Read.WAIT: lambda: time.sleep(req.waitInSeconds),
+            assembly.Read.BODY: lambda: (driver.page_source, None),
+            assembly.Read.SCREENSHOT: lambda: driver.get_screenshot_as_png(),
+            assembly.Read.COOKIES: lambda: driver.get_cookies(),
+        })
 
 
 def _apply_timezone(driver: WebDriver, proxy: dict = None) -> None:

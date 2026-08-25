@@ -10,7 +10,6 @@ Chrome, Playwright cookies for stealth. That difference is deliberate, because
 agreeing on the returned dialect is one of the rules being pinned.
 """
 import asyncio
-import base64
 from dataclasses import dataclass, field
 from unittest.mock import patch
 
@@ -70,8 +69,10 @@ class _SeleniumDriver:
     def find_elements(self, *_args):
         return []
 
-    def get_screenshot_as_base64(self):
-        return base64.b64encode(self._world.screenshot).decode("ascii")
+    def get_screenshot_as_png(self):
+        # Raw bytes, like Selenium's own: the base64 encoding is the kernel's job
+        # so both engines hand over the same currency.
+        return self._world.screenshot
 
     def get_cookies(self):
         source = self._world.cookies_after_wait if self.waited else self._world.cookies_at_load
