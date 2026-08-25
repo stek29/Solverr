@@ -48,6 +48,8 @@ class World:
     # Title reads so far, shared by both fakes so "challenged_for" means the
     # same number of looks on either engine.
     looks: list = field(default_factory=list)
+    # One entry per navigation, so the cookie-reload rule is observable.
+    navigations: list = field(default_factory=list)
 
     def read_title(self) -> str:
         self.looks.append(1)
@@ -91,7 +93,7 @@ class _SeleniumDriver:
         return self._world.read_title()
 
     def get(self, _url):
-        pass
+        self._world.navigations.append(1)
 
     def delete_cookie(self, _name):
         pass
@@ -189,7 +191,7 @@ class _PlaywrightPage:
         return object() if self.world.has(selector) else None
 
     async def goto(self, *_a, **_k):
-        pass
+        self.world.navigations.append(1)
 
     async def wait_for_load_state(self, *_a, **_k):
         pass

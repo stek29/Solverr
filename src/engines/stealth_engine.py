@@ -20,6 +20,7 @@ from invisible_playwright.async_api import InvisiblePlaywright
 from playwright_captcha import CaptchaType, ClickSolver, FrameworkType, TwoCaptchaSolver
 
 import assembly
+import budget
 import config
 import geo
 import pipeline
@@ -448,13 +449,15 @@ class StealthEngine(Engine):
         try:
             await instrument(page)
             logging.debug(f"Navigating to... {req.url}")
-            await navigate(page)
 
-            # set cookies if required, then reload (mirrors the Chrome engine)
-            if req.cookies is not None and len(req.cookies) > 0:
-                logging.debug("Setting cookies...")
-                await ctx.context.add_cookies(_to_playwright_cookies(req.cookies))
-                await navigate(page)
+            # The navigate-then-cookies-then-navigate order is shared with the
+            # Chrome engine (pipeline.py); only the two steps below are this
+            # engine's.
+            await pipeline.run_async(
+                {pipeline.Step.NAVIGATE: lambda _arg: navigate(page),
+                 pipeline.Step.SET_COOKIES:
+                     lambda cookies: ctx.context.add_cookies(_to_playwright_cookies(cookies))},
+                kernel=pipeline.approach, req=req)
 
             if utils.get_config_log_html():
                 logging.debug(f"Response HTML:\n{await page.content()}")
@@ -483,7 +486,7 @@ class StealthEngine(Engine):
                 # outer wait_for fire first and turn a clean "still challenged"
                 # verdict (which the controller can retry on the other engine) into
                 # a timeout error.
-                deadline = started + max(1.0, timeout - 3)
+                deadline = budget.solve_deadline(started, timeout)
                 # Both kinds are handled on the context's own page: an interstitial
                 # clears itself, and a widget is clicked by coordinate, so neither
                 # needs the solver's init scripts. Only the paid escalation below

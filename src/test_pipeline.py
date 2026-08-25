@@ -9,10 +9,12 @@ Run: PYTHONPATH=src uv run --no-project python -m unittest test_pipeline
 """
 import unittest
 
+import budget
 import pipeline
+from dtos import V1RequestBase
 from detection import (ACCESS_DENIED_SELECTORS, ACCESS_DENIED_TITLES,
                        CHALLENGE_SELECTORS, CHALLENGE_TITLES, TURNSTILE_SELECTORS)
-from pipeline import Look, Verdict
+from pipeline import Look, Step, Verdict
 
 
 def decide(title="Example", present=(), *, turnstile_is_a_challenge=True):
@@ -105,6 +107,48 @@ class ShortCircuitTest(unittest.TestCase):
     def test_a_challenge_title_skips_the_challenge_selectors(self):
         looked = decide(title=CHALLENGE_TITLES[0])[3]
         self.assertNotIn(CHALLENGE_SELECTORS[0], looked)
+
+
+class ApproachTest(unittest.TestCase):
+    """Loading the page, and the reload that supplied cookies force."""
+
+    def steps(self, **fields):
+        taken = []
+        req = V1RequestBase(dict({"url": "https://example-site.tld/"}, **fields))
+        pipeline.run({s: (lambda arg, s=s: taken.append(s)) for s in Step},
+                     kernel=pipeline.approach, req=req)
+        return taken
+
+    def test_a_plain_request_navigates_once(self):
+        self.assertEqual(self.steps(), [Step.NAVIGATE])
+
+    def test_cookies_are_set_between_two_navigations(self):
+        self.assertEqual(self.steps(cookies=[{"name": "a", "value": "1"}]),
+                         [Step.NAVIGATE, Step.SET_COOKIES, Step.NAVIGATE])
+
+    def test_an_empty_cookie_list_changes_nothing(self):
+        self.assertEqual(self.steps(cookies=[]), [Step.NAVIGATE])
+
+    def test_cookies_are_never_set_before_the_first_navigation(self):
+        # They can only be set against an origin the browser is already on.
+        taken = self.steps(cookies=[{"name": "a", "value": "1"}])
+        self.assertEqual(taken[0], Step.NAVIGATE)
+
+
+class SolveDeadlineTest(unittest.TestCase):
+    """One formula, shared, rather than the same arithmetic in both engines."""
+
+    def test_the_margin_is_kept_back_for_the_response(self):
+        self.assertEqual(budget.solve_deadline(100.0, 60.0),
+                         100.0 + 60.0 - budget.SOLVE_MARGIN_SECONDS)
+
+    def test_a_budget_smaller_than_the_margin_still_allows_one_second(self):
+        # A request that cannot finish is still worth one attempt; the outer cap
+        # stops it either way.
+        self.assertEqual(budget.solve_deadline(100.0, 1.0), 101.0)
+
+    def test_a_zero_budget_still_allows_one_second(self):
+        self.assertEqual(budget.solve_deadline(100.0, 0.0), 101.0)
 
 
 if __name__ == '__main__':

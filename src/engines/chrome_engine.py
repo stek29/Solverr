@@ -22,6 +22,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.wait import WebDriverWait
 
 import assembly
+import budget
 import config
 import geo
 import pipeline
@@ -43,12 +44,6 @@ _TURNSTILE_SELECTOR = ", ".join(TURNSTILE_SELECTORS)
 # (_NETWORKIDLE_MS), and only a request that asked for tabs_till_verify can wait
 # it out on a page that turns out to have no widget at all.
 _WIDGET_RENDER_SECONDS = 5
-
-# Left on the request budget for building the response once the token loop gives
-# up, so an unsolved widget returns a page instead of tripping func_timeout.
-# Mirrors the stealth engine's own deadline margin.
-_TOKEN_DEADLINE_MARGIN_SECONDS = 3
-
 
 class ChromeEngine(Engine):
     """Solve challenges with a real Chromium driven by undetected_chromedriver."""
@@ -132,28 +127,28 @@ class ChromeEngine(Engine):
         logging.debug(f"Navigating to... {req.url}")
         turnstile_token = None
 
-        if method == "POST":
-            _post_request(req, driver)
-        else:
-            driver.get(req.url)
-
-        # set cookies if required
-        if req.cookies is not None and len(req.cookies) > 0:
-            logging.debug(f'Setting cookies...')
-            for cookie in req.cookies:
-                driver.delete_cookie(cookie['name'])
-                driver.add_cookie(cookie)
-            # reload the page
-            if method == 'POST':
+        def navigate(_arg):
+            if method == "POST":
                 _post_request(req, driver)
             else:
                 driver.get(req.url)
+
+        def set_cookies(cookies):
+            for cookie in cookies:
+                driver.delete_cookie(cookie['name'])
+                driver.add_cookie(cookie)
+
+        # The navigate-then-cookies-then-navigate order is shared with the
+        # stealth engine (pipeline.py); only the two steps above are Chrome's.
+        pipeline.run({pipeline.Step.NAVIGATE: navigate,
+                      pipeline.Step.SET_COOKIES: set_cookies},
+                     kernel=pipeline.approach, req=req)
 
         # After the cookie reload, not before it: the reload replaces the document,
         # so a token resolved first described a page that no longer exists by the
         # time it was returned. POST is left out, as it was before.
         if method != "POST" and req.tabs_till_verify is not None:
-            deadline = started + max(1.0, timeout - _TOKEN_DEADLINE_MARGIN_SECONDS)
+            deadline = budget.solve_deadline(started, timeout)
             turnstile_token = _resolve_turnstile_captcha(driver, req.tabs_till_verify, deadline)
 
         # wait for the page

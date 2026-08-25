@@ -22,6 +22,7 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 ### Other
 
 - Bumped Selenium, requests, certifi, websockets, packaging, prometheus-client, and xvfbwrapper to the versions upstream FlareSolverr now pins.
+- The two engines now share the rules they used to implement separately: how a response is assembled, what counts as a challenge, when the page is reloaded, and how much of the budget is kept back to answer with. No change to what a request returns; a change to one engine can no longer miss the other.
 
 ## [1.5.0]
 

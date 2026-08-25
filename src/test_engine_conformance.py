@@ -127,6 +127,34 @@ class EngineConformanceTest(unittest.TestCase):
         self.assertEqual(len(set(map(tuple, seen.values()))), 1, seen)
 
 
+class NavigationConformanceTest(unittest.TestCase):
+    """Both engines load the page the same number of times, for the same reasons."""
+
+    def navigations(self, **fields):
+        for harness in HARNESSES:
+            world = World()
+            harness.solve(world, **fields)
+            yield harness.name, len(world.navigations)
+
+    def test_a_plain_request_loads_the_page_once(self):
+        for name, count in self.navigations():
+            with self.subTest(engine=name):
+                self.assertEqual(count, 1)
+
+    def test_supplied_cookies_force_a_second_load(self):
+        # Cookies can only be set against an origin, so the document fetched to
+        # get there was fetched without them. Skipping the reload leaves them
+        # set but unused, which looks like they were ignored.
+        for name, count in self.navigations(cookies=[{"name": "a", "value": "1"}]):
+            with self.subTest(engine=name):
+                self.assertEqual(count, 2)
+
+    def test_an_empty_cookie_list_does_not_force_one(self):
+        for name, count in self.navigations(cookies=[]):
+            with self.subTest(engine=name):
+                self.assertEqual(count, 1)
+
+
 class DetectionConformanceTest(unittest.TestCase):
     """Both engines reach the same verdict about a page from the same lists.
 

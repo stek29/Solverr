@@ -19,6 +19,7 @@ win and cost the whole budget. The stealth engine clicks by coordinate and needs
 no such help. That is a capability boundary, pinned by
 `test_engine_conformance.DetectionConformanceTest`.
 """
+import logging
 from enum import Enum, auto
 
 from detection import (ACCESS_DENIED_SELECTORS, ACCESS_DENIED_TITLES,
@@ -26,6 +27,12 @@ from detection import (ACCESS_DENIED_SELECTORS, ACCESS_DENIED_TITLES,
 
 BLOCKED_MESSAGE = ('Cloudflare has blocked this request. '
                    'Probably your IP is banned for this site, check in your web browser.')
+
+
+class Step(Enum):
+    """Something only the engine can do. The order they appear in is the rule."""
+    NAVIGATE = auto()
+    SET_COOKIES = auto()   # carries the cookies the caller supplied
 
 
 class Look(Enum):
@@ -38,6 +45,23 @@ class Verdict(Enum):
     DENIED = auto()
     CHALLENGE = auto()
     NONE = auto()
+
+
+def approach(req):
+    """Load the page, with any cookies the caller supplied applied to it.
+
+    Cookies force a second navigation. They can only be set against an origin,
+    so the browser has to be on the page before they can go in, and the document
+    it fetched to get there was fetched without them. Skipping the reload leaves
+    the caller's cookies set but unused, which looks like they were ignored.
+
+    Driven by `run` or `run_async` below rather than called directly.
+    """
+    yield Step.NAVIGATE, None
+    if req.cookies:
+        logging.debug("Setting cookies...")
+        yield Step.SET_COOKIES, req.cookies
+        yield Step.NAVIGATE, None
 
 
 def verdict(*, turnstile_is_a_challenge: bool):
@@ -76,23 +100,23 @@ def verdict(*, turnstile_is_a_challenge: bool):
     return Verdict.NONE, is_turnstile, None
 
 
-def run(looks: dict, **kwargs):
-    """Drive the verdict where every look is synchronous."""
-    generator = verdict(**kwargs)
+def run(handlers: dict, kernel=None, **kwargs):
+    """Drive a kernel where every step is synchronous."""
+    generator = (kernel or verdict)(**kwargs)
     try:
         step, arg = next(generator)
         while True:
-            step, arg = generator.send(looks[step](arg))
+            step, arg = generator.send(handlers[step](arg))
     except StopIteration as done:
         return done.value
 
 
-async def run_async(looks: dict, **kwargs):
-    """Drive the same verdict where every look is awaitable."""
-    generator = verdict(**kwargs)
+async def run_async(handlers: dict, kernel=None, **kwargs):
+    """Drive the same kernel where every step is awaitable."""
+    generator = (kernel or verdict)(**kwargs)
     try:
         step, arg = next(generator)
         while True:
-            step, arg = generator.send(await looks[step](arg))
+            step, arg = generator.send(await handlers[step](arg))
     except StopIteration as done:
         return done.value

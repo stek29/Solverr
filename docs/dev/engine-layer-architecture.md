@@ -148,8 +148,20 @@ live-checked.
    moved. That is what surfaced the turnstile asymmetry as a fact rather than a surprise.
 
    Chrome's cost is unchanged at 15 selector round trips on a clean page, because the kernel only
-   looks for a widget when the engine could act on one. **Still to do in this step:** the
-   navigate-then-set-cookies-then-renavigate order, the shared budget, and the fallback.
+   looks for a widget when the engine could act on one.
+
+   Finished the same day. Two of the three remaining items turned out to need nothing: the even
+   split and the fallback were already single-sourced in `_resolve_challenge`, so this document
+   listed them as work when they were already done. What was genuinely duplicated was the
+   navigate-then-set-cookies-then-renavigate order, now `pipeline.approach`, and the solve deadline
+   `max(1.0, timeout - 3)`, which appeared in both engines with the constant named on one side and
+   bare on the other, now `budget.solve_deadline`.
+
+   **What the engines still sequence themselves**, deliberately: between `approach` and `verdict`
+   each one does its own interleaved work, Chrome resolving a `tabs_till_verify` token and holding
+   the `<html>` element for its staleness wait, the stealth engine dumping HTML and settling on
+   networkidle before re-detecting. Those are engine mechanisms rather than a shared order, so
+   forcing them into one kernel would have meant a kernel shaped around both engines' internals.
 5. **Sessions.** One registry, `SessionRef`, and the check-then-act race in `sessions.get` fixed
    structurally rather than patched.
 6. **Config, then `RESPONSE_HEADERS`** as the first feature written once under the new rule, which
