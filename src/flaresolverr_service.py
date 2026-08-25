@@ -17,7 +17,7 @@ import geo
 import utils
 from dtos import (STATUS_ERROR, STATUS_OK, ChallengeResolutionResultT,
                   ChallengeResolutionT, HealthResponse, IndexResponse,
-                  V1RequestBase, V1ResponseBase)
+                  V1RequestBase, V1ResponseBase, validate_request_types)
 from engines.base import SolveResult
 from engines.chrome_engine import ChromeEngine
 from sessions import SessionsStorage
@@ -112,6 +112,10 @@ def _controller_v1_handler(req: V1RequestBase) -> V1ResponseBase:
         logging.warning("Request parameter 'headers' was removed in FlareSolverr v2.")
     if req.userAgent is not None:
         logging.warning("Request parameter 'userAgent' was removed in FlareSolverr v2.")
+
+    # Types first, so everything below it (and every engine downstream) works on
+    # values whose shape has been established rather than assumed.
+    validate_request_types(req)
 
     # set default values
     _validate_max_timeout(req)

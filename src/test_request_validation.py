@@ -12,6 +12,7 @@ import unittest
 
 import flaresolverr_service
 from dtos import V1RequestBase
+from dtos import validate_request_types
 from flaresolverr_service import _validate_max_timeout, _validate_url
 
 
@@ -171,3 +172,63 @@ class MaxTimeoutTest(unittest.TestCase):
         req = self.request(86400000)
         _validate_max_timeout(req)
         self.assertEqual(req.maxTimeout, 86400000)
+
+class RequestTypesTest(unittest.TestCase):
+    """The annotations on V1RequestBase are only binding because of this pass.
+
+    Everything downstream reads these with `in`, truthiness, comparison or
+    indexing, none of which check what they were given.
+    """
+
+    def check(self, **fields):
+        validate_request_types(V1RequestBase(dict({"cmd": "request.get"}, **fields)))
+
+    def test_a_url_that_is_not_a_string_is_refused(self):
+        # Reached a regex and raised "expected string or bytes-like object".
+        with self.assertRaises(Exception):
+            self.check(url=12345)
+
+    def test_a_string_in_a_boolean_is_refused(self):
+        # Truthy, so "false" used to switch the feature on.
+        with self.assertRaises(Exception):
+            self.check(returnOnlyCookies="false")
+
+    def test_the_refusal_names_the_parameter_and_the_type(self):
+        with self.assertRaises(Exception) as caught:
+            self.check(disableMedia="false")
+        self.assertIn("'disableMedia' must be true or false", str(caught.exception))
+
+    def test_cookies_that_are_not_a_list_are_refused(self):
+        with self.assertRaises(Exception):
+            self.check(cookies="nope")
+
+    def test_a_proxy_that_is_not_an_object_is_refused(self):
+        with self.assertRaises(Exception):
+            self.check(proxy="socks5://1.2.3.4:9050")
+
+    def test_a_wait_that_is_not_a_number_is_refused(self):
+        # Raised on a comparison after the challenge was already solved.
+        with self.assertRaises(Exception):
+            self.check(waitInSeconds="ten")
+
+    def test_a_fractional_wait_is_accepted(self):
+        self.assertIsNone(self.check(waitInSeconds=1.5))
+
+    def test_a_boolean_is_not_accepted_as_a_number(self):
+        with self.assertRaises(Exception):
+            self.check(tabs_till_verify=True)
+
+    def test_a_numeric_max_timeout_string_is_left_to_its_own_validator(self):
+        # Deliberately coerced rather than type-checked, for callers that work today.
+        self.assertIsNone(self.check(maxTimeout="90000"))
+
+    def test_correctly_typed_parameters_pass(self):
+        self.assertIsNone(self.check(
+            url="https://example-site.tld/", cookies=[{"name": "a", "value": "1"}],
+            proxy={"url": "http://p:1"}, returnOnlyCookies=True, waitInSeconds=2,
+            tabs_till_verify=1, engine="auto"))
+
+    def test_an_unknown_parameter_is_kept_rather_than_refused(self):
+        # The contract takes additive optional fields, so a client sending one
+        # this build does not know about has to keep working.
+        self.assertIsNone(self.check(url="https://example-site.tld/", someFutureField=1))

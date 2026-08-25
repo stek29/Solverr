@@ -17,6 +17,7 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 - **A request that sends both `cookies` and `tabs_till_verify` now returns a token for the page it actually hands back.** The token was read before the cookie reload, so it described a document that had already been replaced.
 - **A malformed `proxy` is now refused instead of quietly sending the request unproxied from the server's own address.** A proxy given as a plain string, or as an object with no `url`, used to read as "no proxy" and the solve went ahead and reported success, so nothing revealed that the traffic never went through it.
 - **Proxy credentials are no longer left behind on disk when a browser fails to start.** The temporary extension carrying the proxy username and password was only cleaned up after a successful launch.
+- **A request parameter of the wrong type is now refused by name instead of misbehaving or failing obscurely.** `"returnOnlyCookies": "false"` was truthy and dropped the response body, a numeric `url` reported a Python type rather than the parameter, and a bad `waitInSeconds` failed only after the challenge had already been solved. A misspelled parameter is now logged as ignored rather than passing silently.
 
 ### Other
 

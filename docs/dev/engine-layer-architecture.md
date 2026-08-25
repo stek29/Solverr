@@ -107,8 +107,14 @@ One surface at a time, extracting the shared behaviour before folding the second
 onto it, so no step gambles a surface on one adapter. Each step is independently shippable and
 live-checked.
 
-1. **Request boundary.** The typed request model and one validation pass. Absorbs the boundary
-   findings recorded on 2026-08-25.
+1. **Request boundary.** Done 2026-08-25. `validate_request_types` in `dtos.py` derives the checks
+   from `V1RequestBase.__annotations__`, so a parameter added to the class is checked without
+   anyone remembering to add it anywhere, and runs once in `_controller_v1_handler` beside
+   `_validate_max_timeout`. Two documented exceptions: `maxTimeout` stays coerced rather than
+   type-checked, and an unknown parameter is logged and kept rather than refused, because the
+   contract takes additive optional fields. The validation lives next to the annotations rather
+   than in a new `api/` package: moving files and changing behaviour in one diff would make both
+   harder to review, so the package reshape is a later, behaviour-free move.
 2. **Conformance suite against today's engines.** Characterisation before movement, so every later
    step has something that fails before `/live-check` does.
 3. **Result assembly.** `assemble` extracted; both engines call it. This is the step that makes the
@@ -123,7 +129,7 @@ Steps 1 and 3 alone remove most of the duplication class.
 
 ## Status
 
-Designed 2026-08-25, not started. Grounded by a whole-codebase audit the same day and by divergence
+Designed 2026-08-25, step 1 shipped the same day. Grounded by a whole-codebase audit and by divergence
 measurements against both upstreams. This is a deliberate refactor sprint, exempted from the
 no-standalone-refactor line in [code-quality.md](../../.claude/rules/code-quality.md) by the owner,
 because the per-engine duplication is not sustainable and has now produced a defect in both engines

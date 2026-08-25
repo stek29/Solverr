@@ -83,7 +83,7 @@ work gets mis-planned.
 
 | Surface | Depth | What is shared | Status |
 |---|---|---|---|
-| Request boundary | Full takeover | Parsing, typing and validation of every `/v1` parameter | Not started |
+| Request boundary | Full takeover | Parsing, typing and validation of every `/v1` parameter | **Done**, `validate_request_types` |
 | Result assembly | Full takeover | `assemble` as a pure function of request plus `PageView` | Not started |
 | Solve orchestration | Takeover of orchestration | Order of operations, budget, detection, fallback | Not started |
 | Challenge clearing | Engine only, by mechanism | Nothing. Declined, see Ownership | Standing decline |
